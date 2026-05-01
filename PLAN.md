@@ -827,10 +827,17 @@ export class SessionError extends Error {
 
 ```ts
 // @authkit/sessions/adapters/cookie
-export function createCookieStore<T extends SessionData = SessionData>(opts?: {
+//
+// Two pieces — pair via `SessionConfig.store` + `SessionConfig.cookieCodec`.
+// The store has no `__codec` field on the public `SessionStore<T>`
+// surface; the codec is a separate value the manager consumes
+// directly. Keeps the store contract clean for third-party adapters.
+export function createCookieStore<T extends SessionData = SessionData>(): SessionStore<T>;
+export function createCookieCodec<T extends SessionData = SessionData>(opts: {
+  secrets: string | Uint8Array | readonly (string | Uint8Array)[];
   /** Hard ceiling on encoded payload size. Default 3072 bytes (browser-safe). */
   maxBytes?: number;
-}): SessionStore<T>;
+}): StatelessCookieCodec<T>;
 
 // @authkit/sessions/adapters/memory
 //
@@ -1105,14 +1112,21 @@ fully-formed `Set-Cookie` header.
   is exposed. Stateful stores use HMAC alone, because the cookie carries
   only an opaque session id and there is nothing to encrypt.
 - **Zero `any`, no internal casts** — `as` is banned by Biome rule outside
-  `core/encoder.ts` (envelope deserialisation) and `crypto/*` (Uint8Array
-  view casts). Runtime validation of decoded payloads happens at the
-  boundary, not deep inside the engine.
-- **Atomic concurrency** — Redis adapter ships a Lua script that does
-  `LRANGE → EVICT → LPUSH` in one round-trip; Postgres adapter uses a
-  single `WITH inserted AS (...) DELETE FROM ... WHERE ...` CTE; KV /
-  Upstash use eventual consistency with a "stale-set tolerated, never
-  exceeds N+1" guarantee documented in §9.
+  `core/encoder.ts` (envelope deserialisation), `crypto/*` (Uint8Array
+  view casts), and `frameworks/*` (writes onto framework-typed request
+  contexts that the user augments via `declare module`). Runtime
+  validation of decoded payloads happens at the boundary, not deep
+  inside the engine.
+- **Best-effort concurrency** — the manager enforces concurrency by
+  reading `listByUser`, evicting overflow, then writing the new record.
+  Two parallel `create` calls can briefly admit `max + 1` sessions
+  before consistency catches up; this is documented behaviour for
+  every adapter in this cut. Atomic primitives (Redis single-EVAL
+  enforce-and-evict, Postgres `WITH inserted ... DELETE ... CTE`) are
+  scoped for a follow-up; the Lua scaffolding lives in
+  `adapters/redis/lua.ts` for now. Cookie-only adapter wires
+  concurrency as a no-op (no cross-device index possible) and the
+  manager logs a one-shot dev warning when both are configured.
 
 ---
 
@@ -1333,6 +1347,17 @@ because no feature code is reachable from `src/index.ts` — every
 `features/*` module is its own subpath and is only pulled in when the
 user explicitly imports it. The framework adapter budgets account for
 the bundled CSRF feature (the secure-by-default it ships).
+
+**Architectural caveat (current cut):** the manager inlines
+fingerprint capture, concurrency enforcement, the CSRF mirror-cookie
+write and the audit-emit shim directly in `core/manager.ts`; the
+`features/*` subpath modules are configuration factories that produce
+typed handles consumed by the manager. This diverges from the
+"lifecycle hooks on `SessionFeature` impls" sketch in §3.1 — the
+follow-up that moves runtime logic onto `feature.onCreate` /
+`feature.onRead` is tracked alongside the atomic-concurrency work.
+The size budgets above will be re-validated once `size-limit` is
+wired into CI; until then they are aspirational targets.
 
 ### 6.2 Tree-shaking enablers
 

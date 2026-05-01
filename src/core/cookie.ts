@@ -15,6 +15,27 @@ export const DEFAULT_COOKIE_OPTIONS: Required<Omit<CookieOptions, 'domain'>> = {
 const COOKIE_NAME_RE = /^[!#$%&'*+\-.0-9A-Z^_`a-z|~]+$/;
 
 /**
+ * Reject any byte that would let an attacker close the current
+ * `Set-Cookie` value and inject a new header (CR / LF), terminate the
+ * attribute list (`;`), or smuggle whitespace / control bytes that
+ * break header parsing.
+ */
+const COOKIE_HEADER_INJECT_RE = /[\x00-\x1F\x7F;,\s]/;
+/** Domain attribute charset — labels per RFC 1123 plus optional leading dot. */
+const COOKIE_DOMAIN_RE = /^\.?[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/;
+/** Path attribute — printable ASCII without `;` or whitespace. */
+const COOKIE_PATH_RE = /^[\x20-\x3A\x3C-\x7E]*$/;
+
+function rejectHeaderInjection(field: 'domain' | 'path', value: string): void {
+  if (COOKIE_HEADER_INJECT_RE.test(value)) {
+    throw new SessionError(
+      'CONFIG_INVALID',
+      `cookie ${field} contains illegal characters (CR/LF/;/whitespace/control)`,
+    );
+  }
+}
+
+/**
  * Compose a `Set-Cookie` header value from a name, value and attribute
  * bag. Hand-rolled to keep the bundle small and to avoid a dependency
  * on the `cookie` npm package, which is CommonJS and not edge-friendly.
@@ -62,6 +83,20 @@ export function serializeCookie(
 
   if (opts.sameSite === 'None' && !opts.secure) {
     throw new SessionError('CONFIG_INVALID', 'SameSite=None requires Secure');
+  }
+
+  rejectHeaderInjection('path', opts.path);
+  if (!COOKIE_PATH_RE.test(opts.path)) {
+    throw new SessionError('CONFIG_INVALID', `invalid cookie path: ${JSON.stringify(opts.path)}`);
+  }
+  if (opts.domain !== undefined) {
+    rejectHeaderInjection('domain', opts.domain);
+    if (!COOKIE_DOMAIN_RE.test(opts.domain)) {
+      throw new SessionError(
+        'CONFIG_INVALID',
+        `invalid cookie domain: ${JSON.stringify(opts.domain)}`,
+      );
+    }
   }
 
   const parts: string[] = [`${prefix}${name}=${value}`];

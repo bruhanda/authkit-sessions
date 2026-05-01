@@ -176,4 +176,25 @@ export interface SessionManager<T extends SessionData = SessionData> {
    *   const token = await sessions.getCsrfToken(req);
    */
   getCsrfToken(req: Request): Promise<string | null>;
+
+  /**
+   * Set of feature names enabled on this manager (e.g. `'csrf'`,
+   * `'fingerprint'`). Framework adapters use this to refuse to start
+   * when a security-relevant feature was forgotten — see the
+   * `csrf-default-on` invariant they enforce. Internal: do not rely
+   * on the membership semantics for anything other than introspection.
+   *
+   * @internal
+   */
+  readonly __features: ReadonlySet<'audit' | 'csrf' | 'fingerprint' | 'concurrency'>;
+
+  /**
+   * `true` iff the user passed `csrf: false` in the config — i.e.
+   * explicitly opted out of CSRF rather than forgetting to wire it.
+   * Framework adapters consult this to decide between "fail at boot"
+   * (forgot) and "skip enforcement" (opted out).
+   *
+   * @internal
+   */
+  readonly __csrfOptedOut: boolean;
 }

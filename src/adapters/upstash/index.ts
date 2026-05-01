@@ -1,4 +1,5 @@
-import { decodeRecord, encodeRecord } from '../../core/encoder.js';
+import { decodeRecord, encodeRecord, parseMetadataBlob } from '../../core/encoder.js';
+import { nowSeconds } from '../../core/time.js';
 import { SessionError } from '../../errors/base.js';
 import type { SessionData, SessionMetadata } from '../../types/session.js';
 import type { SessionStore } from '../../types/store.js';
@@ -47,17 +48,15 @@ export interface UpstashClientLike {
  */
 export function createUpstashStore<T extends SessionData = SessionData>(
   client: UpstashClientLike,
-  opts: { keyPrefix?: string } = {},
+  opts: { keyPrefix?: string; clock?: () => number } = {},
 ): SessionStore<T> {
   const keyPrefix = opts.keyPrefix ?? DEFAULT_KEY_PREFIX;
+  const clock = opts.clock ?? nowSeconds;
   const recordKey = (id: string): string => `${keyPrefix}${id}`;
   const metaKey = (id: string): string => `${keyPrefix}${META_PREFIX}${id}`;
   const userKey = (userId: string): string => `${USER_PREFIX}${userId}`;
 
-  const ttlFor = (meta: SessionMetadata): number => {
-    const now = Math.floor(Date.now() / 1000);
-    return Math.max(1, meta.expiresAt - now);
-  };
+  const ttlFor = (meta: SessionMetadata): number => Math.max(1, meta.expiresAt - clock());
 
   const wrap = async <R>(fn: () => Promise<R>, op: string): Promise<R> => {
     try {
@@ -107,7 +106,7 @@ export function createUpstashStore<T extends SessionData = SessionData>(
         const metaBlob = await client.get(metaKey(id));
         const removed = await client.del(recordKey(id), metaKey(id));
         if (metaBlob) {
-          const meta = parseMeta(metaBlob);
+          const meta = parseMetadataBlob(metaBlob);
           if (meta?.userId !== undefined) await client.srem(userKey(meta.userId), id);
         }
         return removed > 0;
@@ -121,7 +120,7 @@ export function createUpstashStore<T extends SessionData = SessionData>(
         for (const id of ids) {
           const blob = await client.get(metaKey(id));
           if (!blob) continue;
-          const meta = parseMeta(blob);
+          const meta = parseMetadataBlob(blob);
           if (meta) out.push(meta);
         }
         return out;
@@ -145,14 +144,3 @@ export function createUpstashStore<T extends SessionData = SessionData>(
   };
 }
 
-function parseMeta(blob: string): SessionMetadata | null {
-  try {
-    const parsed: unknown = JSON.parse(blob);
-    if (!parsed || typeof parsed !== 'object') return null;
-    const m = parsed as Record<string, unknown>;
-    if (typeof m['id'] !== 'string') return null;
-    return parsed as SessionMetadata;
-  } catch {
-    return null;
-  }
-}

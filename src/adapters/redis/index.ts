@@ -1,4 +1,5 @@
-import { decodeRecord, encodeRecord } from '../../core/encoder.js';
+import { decodeRecord, encodeRecord, parseMetadataBlob } from '../../core/encoder.js';
+import { nowSeconds } from '../../core/time.js';
 import { SessionError } from '../../errors/base.js';
 import type { SessionData, SessionMetadata } from '../../types/session.js';
 import type { SessionStore } from '../../types/store.js';
@@ -40,18 +41,16 @@ const META_PREFIX = 'meta:';
  */
 export function createRedisStore<T extends SessionData = SessionData>(
   client: RedisLike,
-  opts: { keyPrefix?: string; userIndexPrefix?: string } = {},
+  opts: { keyPrefix?: string; userIndexPrefix?: string; clock?: () => number } = {},
 ): SessionStore<T> {
   const keyPrefix = opts.keyPrefix ?? DEFAULT_KEY_PREFIX;
   const userIndexPrefix = opts.userIndexPrefix ?? DEFAULT_USER_INDEX_PREFIX;
+  const clock = opts.clock ?? nowSeconds;
   const recordKey = (id: string): string => `${keyPrefix}${id}`;
   const metaKey = (id: string): string => `${keyPrefix}${META_PREFIX}${id}`;
   const userKey = (userId: string): string => `${userIndexPrefix}${userId}`;
 
-  const ttlFor = (meta: SessionMetadata): number => {
-    const now = Math.floor(Date.now() / 1000);
-    return Math.max(1, meta.expiresAt - now);
-  };
+  const ttlFor = (meta: SessionMetadata): number => Math.max(1, meta.expiresAt - clock());
 
   const wrap = async <R>(fn: () => Promise<R>, op: string): Promise<R> => {
     try {
@@ -117,7 +116,7 @@ export function createRedisStore<T extends SessionData = SessionData>(
         const existingMeta = await client.get(metaKey(id));
         const removed = await client.del([recordKey(id), metaKey(id)]);
         if (existingMeta) {
-          const meta = decodeMeta(existingMeta);
+          const meta = parseMetadataBlob(existingMeta);
           if (meta?.userId !== undefined) await indexRemove(meta.userId, id);
         }
         return removed > 0;
@@ -131,7 +130,7 @@ export function createRedisStore<T extends SessionData = SessionData>(
         for (const id of ids) {
           const blob = await client.get(metaKey(id));
           if (!blob) continue;
-          const meta = decodeMeta(blob);
+          const meta = parseMetadataBlob(blob);
           if (meta) out.push(meta);
         }
         return out;
@@ -157,19 +156,4 @@ export function createRedisStore<T extends SessionData = SessionData>(
 
 function encodeMeta(meta: SessionMetadata): string {
   return JSON.stringify(meta);
-}
-
-function decodeMeta(blob: string): SessionMetadata | null {
-  try {
-    const parsed: unknown = JSON.parse(blob);
-    if (!parsed || typeof parsed !== 'object') return null;
-    const m = parsed as Record<string, unknown>;
-    if (typeof m['id'] !== 'string') return null;
-    // The Redis adapter is the single source for serialised metadata;
-    // structural validation happens here, then we trust the rest of
-    // the engine's invariants for that record.
-    return parsed as SessionMetadata;
-  } catch {
-    return null;
-  }
 }

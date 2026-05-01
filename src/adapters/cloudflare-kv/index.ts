@@ -1,4 +1,5 @@
-import { decodeRecord, encodeRecord } from '../../core/encoder.js';
+import { decodeRecord, encodeRecord, parseMetadataBlob } from '../../core/encoder.js';
+import { nowSeconds } from '../../core/time.js';
 import { SessionError } from '../../errors/base.js';
 import type { SessionData, SessionMetadata } from '../../types/session.js';
 import type { SessionStore } from '../../types/store.js';
@@ -37,18 +38,16 @@ const META_PREFIX = 'meta:';
  */
 export function createKVStore<T extends SessionData = SessionData>(
   kv: KVNamespace,
-  opts: { userIndex?: KVNamespace; keyPrefix?: string } = {},
+  opts: { userIndex?: KVNamespace; keyPrefix?: string; clock?: () => number } = {},
 ): SessionStore<T> {
   const keyPrefix = opts.keyPrefix ?? DEFAULT_KEY_PREFIX;
   const userIndex = opts.userIndex;
+  const clock = opts.clock ?? nowSeconds;
   const recordKey = (id: string): string => `${keyPrefix}${id}`;
   const metaKey = (id: string): string => `${keyPrefix}${META_PREFIX}${id}`;
   const userKey = (userId: string): string => `user:${userId}`;
 
-  const ttlFor = (meta: SessionMetadata): number => {
-    const now = Math.floor(Date.now() / 1000);
-    return Math.max(60, meta.expiresAt - now);
-  };
+  const ttlFor = (meta: SessionMetadata): number => Math.max(60, meta.expiresAt - clock());
 
   const wrap = async <R>(fn: () => Promise<R>, op: string): Promise<R> => {
     try {
@@ -115,7 +114,7 @@ export function createKVStore<T extends SessionData = SessionData>(
         const metaBlob = await kv.get(metaKey(id));
         await Promise.all([kv.delete(recordKey(id)), kv.delete(metaKey(id))]);
         if (metaBlob && userIndex) {
-          const meta = parseMeta(metaBlob);
+          const meta = parseMetadataBlob(metaBlob);
           if (meta?.userId !== undefined) {
             const ids = (await readUserList(meta.userId)).filter((x) => x !== id);
             await writeUserList(meta.userId, ids, 60);
@@ -133,7 +132,7 @@ export function createKVStore<T extends SessionData = SessionData>(
         for (const id of ids) {
           const blob = await kv.get(metaKey(id));
           if (!blob) continue;
-          const meta = parseMeta(blob);
+          const meta = parseMetadataBlob(blob);
           if (meta) out.push(meta);
         }
         return out;
@@ -155,14 +154,3 @@ export function createKVStore<T extends SessionData = SessionData>(
   };
 }
 
-function parseMeta(blob: string): SessionMetadata | null {
-  try {
-    const parsed: unknown = JSON.parse(blob);
-    if (!parsed || typeof parsed !== 'object') return null;
-    const m = parsed as Record<string, unknown>;
-    if (typeof m['id'] !== 'string') return null;
-    return parsed as SessionMetadata;
-  } catch {
-    return null;
-  }
-}

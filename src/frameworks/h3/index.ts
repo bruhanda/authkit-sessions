@@ -1,6 +1,7 @@
 import { isOriginAllowed } from '../../features/csrf/index.js';
 import type { SessionManager } from '../../types/manager.js';
 import type { SessionData, SessionRecord } from '../../types/session.js';
+import { assertCsrfReady } from '../require-csrf.js';
 
 const PROTECTED = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -23,10 +24,11 @@ const PROTECTED = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
  *   app.use('/me', eventHandler((event) => event.context.session?.data ?? null));
  */
 export function h3Sessions<T extends SessionData>(manager: SessionManager<T>) {
+  const csrfMode = assertCsrfReady(manager);
   return async (event: import('h3').H3Event): Promise<void | Response> => {
     const req = await toStandardRequest(event);
     const session = await manager.get(req);
-    if (session && PROTECTED.has(req.method)) {
+    if (csrfMode === 'enabled' && session && PROTECTED.has(req.method)) {
       if (!isOriginAllowed(req)) {
         return new Response('forbidden', { status: 403 });
       }

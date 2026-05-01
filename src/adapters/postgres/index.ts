@@ -1,3 +1,5 @@
+import { parseMetadataBlob } from '../../core/encoder.js';
+import { nowSeconds } from '../../core/time.js';
 import { SessionError } from '../../errors/base.js';
 import type { SessionData, SessionMetadata, SessionRecord } from '../../types/session.js';
 import type { SessionStore } from '../../types/store.js';
@@ -46,9 +48,10 @@ export type PostgresQuery = <Row = unknown>(
  */
 export function createPostgresStore<T extends SessionData = SessionData>(
   query: PostgresQuery,
-  opts: { tableName?: string } = {},
+  opts: { tableName?: string; clock?: () => number } = {},
 ): SessionStore<T> {
   const table = sanitiseTableName(opts.tableName ?? DEFAULT_TABLE);
+  const clock = opts.clock ?? nowSeconds;
 
   const wrap = async <R>(fn: () => Promise<R>, op: string): Promise<R> => {
     try {
@@ -88,7 +91,7 @@ export function createPostgresStore<T extends SessionData = SessionData>(
         const rows = await query<{ meta: unknown; data: unknown }>(
           `SELECT meta, data FROM ${table}
             WHERE id = $1 AND expires_at > $2 LIMIT 1`,
-          [id, Math.floor(Date.now() / 1000)],
+          [id, clock()],
         );
         const row = rows[0];
         if (!row) return null;
@@ -136,11 +139,11 @@ export function createPostgresStore<T extends SessionData = SessionData>(
           `SELECT meta FROM ${table}
             WHERE user_id = $1 AND expires_at > $2
             ORDER BY last_seen_at DESC`,
-          [userId, Math.floor(Date.now() / 1000)],
+          [userId, clock()],
         );
         const out: SessionMetadata[] = [];
         for (const row of rows) {
-          const meta = parseMeta(row.meta);
+          const meta = parseMetadataBlob(row.meta);
           if (meta) out.push(meta);
         }
         return out;
@@ -159,7 +162,7 @@ export function createPostgresStore<T extends SessionData = SessionData>(
 
     async sweep(now) {
       return wrap(async () => {
-        const cutoff = now ?? Math.floor(Date.now() / 1000);
+        const cutoff = now ?? clock();
         const rows = await query<{ id: string }>(
           `DELETE FROM ${table} WHERE expires_at <= $1 RETURNING id`,
           [cutoff],
@@ -181,24 +184,9 @@ function parseRow<T extends SessionData>(row: {
   meta: unknown;
   data: unknown;
 }): SessionRecord<T> | null {
-  const meta = parseMeta(row.meta);
+  const meta = parseMetadataBlob(row.meta);
   if (!meta) return null;
   // Postgres `jsonb` columns deserialise to `unknown`; the row's `data`
   // is the user-shaped payload by contract (see schema.sql).
   return { meta, data: row.data as T };
-}
-
-function parseMeta(value: unknown): SessionMetadata | null {
-  let parsed: unknown = value;
-  if (typeof value === 'string') {
-    try {
-      parsed = JSON.parse(value);
-    } catch {
-      return null;
-    }
-  }
-  if (!parsed || typeof parsed !== 'object') return null;
-  const m = parsed as Record<string, unknown>;
-  if (typeof m['id'] !== 'string') return null;
-  return parsed as SessionMetadata;
 }

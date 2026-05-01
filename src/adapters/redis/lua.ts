@@ -1,9 +1,15 @@
 /**
  * Lua scripts evaluated server-side via `EVAL` on Redis ≥2.6 / Valkey.
  *
- * Atomic concurrency enforcement: `LRANGE` (or `SMEMBERS`) → check
- * count → optionally evict → `LPUSH` (or `SADD`) → set TTL — all in one
- * round-trip so two parallel `create()` calls cannot exceed the limit.
+ * **Status (current cut):** the user-index helpers below (`SADD` /
+ * `SREM` + `EXPIRE`) are atomic on their own but do NOT yet implement
+ * the single-EVAL `SMEMBERS → check-count → evict → SADD` enforce-
+ * and-evict primitive sketched in `PLAN.md` §9.3.1. The manager
+ * therefore enforces concurrency in app code (read → evict → write)
+ * with a documented best-effort guarantee — two parallel `create()`
+ * calls can briefly admit `max + 1` sessions before consistency
+ * catches up. The hard atomic primitive is tracked alongside the
+ * feature-lifecycle-hook refactor.
  *
  * Stored as inlined string constants (rather than as separate `.lua`
  * files) so the bundler keeps everything in one chunk and the size

@@ -1,6 +1,7 @@
 import { isOriginAllowed } from '../../features/csrf/index.js';
 import type { SessionManager } from '../../types/manager.js';
 import type { SessionData, SessionRecord } from '../../types/session.js';
+import { assertCsrfReady } from '../require-csrf.js';
 
 const PROTECTED = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -21,6 +22,7 @@ const PROTECTED = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
  *   await app.register(fastifySessions(manager));
  */
 export function fastifySessions<T extends SessionData>(manager: SessionManager<T>) {
+  const csrfMode = assertCsrfReady(manager);
   return async (
     fastify: import('fastify').FastifyInstance,
   ): Promise<void> => {
@@ -29,7 +31,7 @@ export function fastifySessions<T extends SessionData>(manager: SessionManager<T
     fastify.addHook('onRequest', async (request, reply) => {
       const standardReq = toStandardRequest(request);
       const session = await manager.get(standardReq);
-      if (session && PROTECTED.has(request.method)) {
+      if (csrfMode === 'enabled' && session && PROTECTED.has(request.method)) {
         if (!isOriginAllowed(standardReq)) {
           reply.code(403).send('forbidden');
           return;

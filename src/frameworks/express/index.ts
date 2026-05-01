@@ -1,6 +1,7 @@
 import { isOriginAllowed } from '../../features/csrf/index.js';
 import type { SessionManager } from '../../types/manager.js';
 import type { SessionData, SessionRecord } from '../../types/session.js';
+import { assertCsrfReady } from '../require-csrf.js';
 
 const PROTECTED = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -28,6 +29,7 @@ const PROTECTED = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
  *   app.use(expressSessions(manager));
  */
 export function expressSessions<T extends SessionData>(manager: SessionManager<T>) {
+  const csrfMode = assertCsrfReady(manager);
   return async (
     req: import('express').Request,
     res: import('express').Response,
@@ -37,7 +39,7 @@ export function expressSessions<T extends SessionData>(manager: SessionManager<T
       const standardReq = toStandardRequest(req);
       const session = await manager.get(standardReq);
 
-      if (session && PROTECTED.has(req.method)) {
+      if (csrfMode === 'enabled' && session && PROTECTED.has(req.method)) {
         if (!isOriginAllowed(standardReq)) {
           res.status(403).send('forbidden');
           return;

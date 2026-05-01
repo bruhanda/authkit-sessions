@@ -88,19 +88,21 @@ export interface SessionStore<T extends SessionData = SessionData> {
    * @returns Number of sessions removed.
    */
   sweep?(now?: number): Promise<number>;
+}
 
-  /**
-   * Opt-in stateless cookie codec. When present, the manager carries
-   * the entire `SessionRecord` inside the session cookie itself (AEAD
-   * sealed) and bypasses the default opaque-id + HMAC scheme. Set ONLY
-   * by the cookie adapter; user-defined stores leave it `undefined`.
-   *
-   * @internal
-   */
-  __codec?: {
-    /** AEAD-seal the record into a cookie-safe string. */
-    encode(record: SessionRecord<T>): string;
-    /** Reverse of `encode`. Returns `null` on any auth/decoding failure. */
-    decode(value: string): SessionRecord<T> | null;
-  };
+/**
+ * Stateless cookie codec. When the manager receives this in
+ * `SessionConfig.cookieCodec` the entire `SessionRecord` is AEAD-sealed
+ * into the session cookie itself (no server-side state needed) and the
+ * default opaque-id + HMAC scheme is bypassed.
+ *
+ * Lives outside `SessionStore<T>` so user-defined stores never see the
+ * codec hook in their IntelliSense — only the cookie adapter (or any
+ * future stateless adapter) constructs one.
+ */
+export interface StatelessCookieCodec<T extends SessionData = SessionData> {
+  /** AEAD-seal the record into a cookie-safe string. */
+  encode(record: SessionRecord<T>): string;
+  /** Reverse of `encode`. Returns `null` on any auth/decoding failure. */
+  decode(value: string): SessionRecord<T> | null;
 }

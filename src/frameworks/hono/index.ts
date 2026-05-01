@@ -1,6 +1,7 @@
 import { isOriginAllowed } from '../../features/csrf/index.js';
 import type { SessionManager } from '../../types/manager.js';
 import type { SessionData, SessionRecord } from '../../types/session.js';
+import { assertCsrfReady } from '../require-csrf.js';
 
 const PROTECTED = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -30,13 +31,14 @@ export function honoSessions<T extends SessionData>(
 ): import('hono').MiddlewareHandler<{
   Variables: { sessions: SessionManager<T>; session: SessionRecord<T> | null };
 }> {
+  const csrfMode = assertCsrfReady(manager);
   return async (c, next) => {
     const req = c.req.raw;
     const session = await manager.get(req);
 
     // CSRF only enforces when a session is active — pre-auth requests
     // (e.g. login submission) have nothing to protect.
-    if (session && PROTECTED.has(req.method)) {
+    if (csrfMode === 'enabled' && session && PROTECTED.has(req.method)) {
       if (!isOriginAllowed(req)) {
         return c.text('forbidden', 403);
       }

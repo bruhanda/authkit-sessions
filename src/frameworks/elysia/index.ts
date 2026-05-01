@@ -1,6 +1,7 @@
 import { isOriginAllowed } from '../../features/csrf/index.js';
 import type { SessionManager } from '../../types/manager.js';
-import type { SessionData, SessionRecord } from '../../types/session.js';
+import type { SessionData } from '../../types/session.js';
+import { assertCsrfReady } from '../require-csrf.js';
 
 const PROTECTED = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -23,10 +24,11 @@ const PROTECTED = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
  *     .get('/me', ({ session }) => session?.data ?? null);
  */
 export function elysiaSessions<T extends SessionData>(manager: SessionManager<T>) {
+  const csrfMode = assertCsrfReady(manager);
   return (app: import('elysia').Elysia) =>
     app.derive(async ({ request }) => {
       const session = await manager.get(request);
-      if (session && PROTECTED.has(request.method)) {
+      if (csrfMode === 'enabled' && session && PROTECTED.has(request.method)) {
         if (!isOriginAllowed(request)) {
           throw new Response('forbidden', { status: 403 });
         }
@@ -36,7 +38,7 @@ export function elysiaSessions<T extends SessionData>(manager: SessionManager<T>
       }
       return {
         sessions: manager,
-        session: session as SessionRecord<T> | null,
+        session,
       };
     });
 }

@@ -1,4 +1,5 @@
 import type { CsrfFeatureImpl } from '../../core/feature.js';
+import { SessionError } from '../../errors/base.js';
 import type { CsrfConfig } from '../../types/csrf.js';
 import type { SessionFeature } from '../../types/feature.js';
 
@@ -8,6 +9,11 @@ const DEFAULT_PROTECTED_METHODS: readonly ('POST' | 'PUT' | 'PATCH' | 'DELETE')[
   'PATCH',
   'DELETE',
 ];
+
+/** Mirrors `COOKIE_NAME_RE` in `core/cookie.ts` — RFC 6265 token chars. */
+const COOKIE_NAME_RE = /^[!#$%&'*+\-.0-9A-Z^_`a-z|~]+$/;
+/** Header field-name token charset (RFC 7230). */
+const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
 /**
  * Construct a CSRF feature handle. The session manager invokes the
@@ -35,10 +41,18 @@ const DEFAULT_PROTECTED_METHODS: readonly ('POST' | 'PUT' | 'PATCH' | 'DELETE')[
  *   });
  */
 export function csrf(config: CsrfConfig = {}): SessionFeature {
+  const cookieName = config.cookieName ?? 'csrf';
+  if (!COOKIE_NAME_RE.test(cookieName)) {
+    throw new SessionError('CONFIG_INVALID', `invalid csrf cookieName: ${JSON.stringify(cookieName)}`);
+  }
+  const headerName = (config.headerName ?? 'x-csrf-token').toLowerCase();
+  if (!HEADER_NAME_RE.test(headerName)) {
+    throw new SessionError('CONFIG_INVALID', `invalid csrf headerName: ${JSON.stringify(config.headerName)}`);
+  }
   const impl: CsrfFeatureImpl = {
     __feature: 'csrf',
-    cookieName: config.cookieName ?? 'csrf',
-    headerName: (config.headerName ?? 'x-csrf-token').toLowerCase(),
+    cookieName,
+    headerName,
     protectedMethods: new Set(config.protectedMethods ?? DEFAULT_PROTECTED_METHODS),
     enforceOrigin: config.enforceOrigin ?? true,
   };

@@ -1,5 +1,5 @@
 import { SessionError } from '../errors/base.js';
-import type { SessionData, SessionRecord } from '../types/session.js';
+import type { SessionData, SessionMetadata, SessionRecord } from '../types/session.js';
 import { base64urlDecodeString, base64urlEncodeString } from '../utils/base64url.js';
 
 /**
@@ -75,6 +75,34 @@ function isMeta(value: unknown): value is SessionRecord<SessionData>['meta'] {
     typeof m['csrf'] === 'string' &&
     m['v'] === 1
   );
+}
+
+/**
+ * Adapter-side helper: parse a metadata blob (JSON string OR a parsed
+ * object — Postgres `jsonb` deserialises as the latter) and validate
+ * every field every consumer of `SessionMetadata` relies on. A
+ * corrupted blob with a missing `expiresAt` or `csrf` would silently
+ * round-trip through a per-adapter `parseMeta` that only checked `id`
+ * and trip the manager later; this helper is the single source of
+ * truth so all adapters reject malformed records identically.
+ *
+ * @param value  String or already-parsed object from the backing store.
+ * @returns Validated metadata, or `null` on any structural failure.
+ *
+ * @example
+ *   const meta = parseMetadataBlob(rawValueFromRedis);
+ */
+export function parseMetadataBlob(value: unknown): SessionMetadata | null {
+  let parsed: unknown = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!isMeta(parsed)) return null;
+  return parsed;
 }
 
 /**

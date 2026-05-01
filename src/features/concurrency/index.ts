@@ -13,10 +13,17 @@ import type { ConcurrencyPolicy } from '../../types/policy.js';
  *   - `'fifo'`: drop the oldest by `createdAt`.
  *   - `'deny-new'`: refuse the new session, throw `CONCURRENCY_DENIED`.
  *
- * Race-condition behaviour: the manager queries `listByUser` then writes
- * with a single round-trip. Stores that expose atomic primitives (Redis
- * Lua, Postgres CTE, Durable Objects) close the N+1 race entirely; KV
- * and Upstash adapters tolerate a documented worst-case overshoot of 1.
+ * **Best-effort concurrency** (current implementation): the manager
+ * queries `listByUser`, evicts overflow, then `create`s the new
+ * record. Two parallel `create` calls can both observe `count < max`
+ * before either inserts, briefly admitting `max + 1` concurrent
+ * sessions. The cookie-only adapter has no cross-device index at all,
+ * so concurrency becomes a no-op there (the manager emits a one-shot
+ * dev warning when wired against `cookieCodec`). Atomic primitives
+ * (Redis Lua, Postgres CTE) are planned (see `lua.ts` placeholder)
+ * but not implemented in the current cut — production code that needs
+ * a hard cap should add a downstream check (e.g. token-revocation
+ * list keyed on `meta.id`).
  *
  * @param policy  Required limit + optional eviction strategy.
  * @returns A `SessionFeature` ready to assign to `SessionConfig.concurrency`.

@@ -1,5 +1,5 @@
 export type { SessionData, SessionMetadata, SessionRecord } from './session.js';
-export type { SessionStore } from './store.js';
+export type { SessionStore, StatelessCookieCodec } from './store.js';
 export type { SessionManager, SessionAttachment } from './manager.js';
 export type { SessionConfig } from './config.js';
 export type { SessionFeature } from './feature.js';

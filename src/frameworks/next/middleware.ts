@@ -1,6 +1,7 @@
 import { isOriginAllowed } from '../../features/csrf/index.js';
 import type { SessionManager } from '../../types/manager.js';
 import type { SessionData } from '../../types/session.js';
+import { assertCsrfReady } from '../require-csrf.js';
 
 const PROTECTED = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -26,13 +27,14 @@ export function createSessionMiddleware<T extends SessionData>(
 ): (
   req: import('next/server').NextRequest,
 ) => Promise<import('next/server').NextResponse> {
+  const csrfMode = assertCsrfReady(manager);
   return async (req) => {
     // Lazy-load to avoid pulling next/server into the package bundle
     // when consumers do not import this entry point.
     const { NextResponse } = await import('next/server');
     const standardReq = req as unknown as Request;
 
-    if (PROTECTED.has(req.method)) {
+    if (csrfMode === 'enabled' && PROTECTED.has(req.method)) {
       const session = await manager.get(standardReq);
       // CSRF only enforces when a session is active — pre-auth requests
       // (e.g. login submission) have nothing to protect.

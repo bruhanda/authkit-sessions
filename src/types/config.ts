@@ -2,7 +2,7 @@ import type { CookieOptions } from './cookie.js';
 import type { SessionFeature } from './feature.js';
 import type { ExpirationPolicy } from './policy.js';
 import type { SessionData } from './session.js';
-import type { SessionStore } from './store.js';
+import type { SessionStore, StatelessCookieCodec } from './store.js';
 
 /**
  * Configuration object handed to `createSessionManager`. Every field has
@@ -36,6 +36,16 @@ export interface SessionConfig<T extends SessionData = SessionData> {
    * accumulates state in a leaky `Map`.
    */
   store: SessionStore<T>;
+
+  /**
+   * Optional stateless cookie codec. When provided, the manager seals
+   * the entire `SessionRecord` into the session cookie itself and
+   * skips the default opaque-id + HMAC scheme — `store` is consulted
+   * only for index operations the cookie cannot serve (`listByUser`,
+   * `deleteByUser`). Constructed by `createCookieCodec` from
+   * `@authkit/sessions/adapters/cookie`.
+   */
+  cookieCodec?: StatelessCookieCodec<T>;
 
   /**
    * Single source of truth for "which user owns this session". Runs on

@@ -1,3 +1,5 @@
+import { parseMetadataBlob } from '../../core/encoder.js';
+import { nowSeconds } from '../../core/time.js';
 import { SessionError } from '../../errors/base.js';
 import type { SessionData, SessionMetadata, SessionRecord } from '../../types/session.js';
 import type { SessionStore } from '../../types/store.js';
@@ -33,9 +35,10 @@ const D1_ROW_CEILING = 950 * 1024;
  */
 export function createD1Store<T extends SessionData = SessionData>(
   db: D1Database,
-  opts: { tableName?: string } = {},
+  opts: { tableName?: string; clock?: () => number } = {},
 ): SessionStore<T> {
   const table = sanitiseTableName(opts.tableName ?? DEFAULT_TABLE);
+  const clock = opts.clock ?? nowSeconds;
 
   const wrap = async <R>(fn: () => Promise<R>, op: string): Promise<R> => {
     try {
@@ -91,7 +94,7 @@ export function createD1Store<T extends SessionData = SessionData>(
             `SELECT meta, data FROM ${table}
               WHERE id = ?1 AND expires_at > ?2 LIMIT 1`,
           )
-          .bind(id, Math.floor(Date.now() / 1000))
+          .bind(id, clock())
           .first<{ meta: string; data: string }>();
         if (!row) return null;
         return parseRow<T>(row);
@@ -142,11 +145,11 @@ export function createD1Store<T extends SessionData = SessionData>(
               WHERE user_id = ?1 AND expires_at > ?2
               ORDER BY last_seen_at DESC`,
           )
-          .bind(userId, Math.floor(Date.now() / 1000))
+          .bind(userId, clock())
           .all<{ meta: string }>();
         const out: SessionMetadata[] = [];
         for (const row of rows.results ?? []) {
-          const meta = parseMeta(row.meta);
+          const meta = parseMetadataBlob(row.meta);
           if (meta) out.push(meta);
         }
         return out;
@@ -165,7 +168,7 @@ export function createD1Store<T extends SessionData = SessionData>(
 
     async sweep(now) {
       return wrap(async () => {
-        const cutoff = now ?? Math.floor(Date.now() / 1000);
+        const cutoff = now ?? clock();
         const result = await db
           .prepare(`DELETE FROM ${table} WHERE expires_at <= ?1`)
           .bind(cutoff)
@@ -187,28 +190,15 @@ function parseRow<T extends SessionData>(row: {
   meta: string;
   data: string;
 }): SessionRecord<T> | null {
+  const meta = parseMetadataBlob(row.meta);
+  if (!meta) return null;
+  let data: unknown;
   try {
-    const meta: unknown = JSON.parse(row.meta);
-    const data: unknown = JSON.parse(row.data);
-    if (!meta || typeof meta !== 'object') return null;
-    const m = meta as Record<string, unknown>;
-    if (typeof m['id'] !== 'string') return null;
-    // Schema-validated: meta passes structural checks, data is the
-    // user payload of declared shape `T`.
-    return { meta: meta as SessionMetadata, data: data as T };
+    data = JSON.parse(row.data);
   } catch {
     return null;
   }
-}
-
-function parseMeta(blob: string): SessionMetadata | null {
-  try {
-    const parsed: unknown = JSON.parse(blob);
-    if (!parsed || typeof parsed !== 'object') return null;
-    const m = parsed as Record<string, unknown>;
-    if (typeof m['id'] !== 'string') return null;
-    return parsed as SessionMetadata;
-  } catch {
-    return null;
-  }
+  // Schema-validated: meta passes structural checks, data is the
+  // user payload of declared shape `T`.
+  return { meta, data: data as T };
 }

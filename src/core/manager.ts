@@ -13,6 +13,7 @@ import type { Device } from '../types/device.js';
 import type { SessionAttachment, SessionManager } from '../types/manager.js';
 import type { SessionData, SessionRecord } from '../types/session.js';
 import { base64urlEncode } from '../utils/base64url.js';
+import { isDev } from '../utils/env.js';
 import { deepFreeze } from '../utils/freeze.js';
 import { invariant } from '../utils/invariant.js';
 import { DEFAULT_COOKIE_OPTIONS, prefixedName, serializeCookie } from './cookie.js';
@@ -89,11 +90,11 @@ export function createSessionManager<T extends SessionData = SessionData>(
     'at least one secret is required',
   );
 
-  const sigKeys: readonly Uint8Array[] = [
+  const [activeSigKey, ...rotatedSigKeys] = [
     deriveSigKey(activeSecret),
-    ...otherSecrets.map((s) => deriveSigKey(s)),
-  ];
-  const activeSigKey = sigKeys[0] ?? deriveSigKey(activeSecret);
+    ...otherSecrets.map(deriveSigKey),
+  ] as const;
+  const sigKeys: readonly Uint8Array[] = [activeSigKey, ...rotatedSigKeys];
   const fingerprintKey = deriveFingerprintKey(activeSecret);
 
   const expiration = resolveExpiration(config.expiration);
@@ -169,7 +170,17 @@ export function createSessionManager<T extends SessionData = SessionData>(
     };
   };
 
-  const codec = store.__codec;
+  const codec = config.cookieCodec;
+  if (codec && concurrencyFeature && isDev()) {
+    // One-shot dev warning: the cookie path cannot index sessions by
+    // user, so `listByUser` returns `[]` and the concurrency limit
+    // becomes a silent no-op. Documented in §9.7.2 — surface it loudly
+    // so misconfigurations are obvious in development.
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[authkit/sessions] concurrency feature is wired against the cookie codec — it will be a no-op (no cross-device index). Pair concurrency with a stateful store (Redis, Postgres, KV, D1, DO).',
+    );
+  }
 
   const buildCookieValue = (record: SessionRecord<T>): string =>
     codec ? codec.encode(record) : signSessionId(record.meta.id, activeSigKey);
@@ -229,9 +240,18 @@ export function createSessionManager<T extends SessionData = SessionData>(
     const outcome = evaluate(record.meta, now, expiration);
     if (outcome.state === 'expired') {
       emit({ type: 'session.read.failed', reason: 'EXPIRED', at: now });
+      emit({
+        type: 'session.destroyed',
+        sessionId: record.meta.id,
+        reason: 'expired',
+        at: now,
+      });
       await store.delete(record.meta.id).catch(() => undefined);
       return null;
     }
+
+    let nextDevice: Device | undefined;
+    let rotateOnNext = record.meta.rotatePending === true;
 
     if (fingerprintFeature && record.meta.device) {
       const current = computeDevice(req, record.meta.device);
@@ -247,26 +267,51 @@ export function createSessionManager<T extends SessionData = SessionData>(
           emit({ type: 'session.read.failed', reason: 'FINGERPRINT_MISMATCH', at: now });
           return null;
         }
-        // 'rotate' / 'ignore' — keep the session alive on read; rotate
-        // happens on the next mutation.
+        if (fingerprintFeature.onMismatch === 'rotate') {
+          // Refresh device hash so the next read on the new device
+          // does not loop on the same mismatch; flag rotation for the
+          // next mutation (read paths cannot emit `Set-Cookie`, so
+          // inline-rotating would orphan the browser cookie).
+          nextDevice = current;
+          rotateOnNext = true;
+        }
+        // 'ignore' — keep the session alive untouched.
       }
     }
 
-    if (outcome.touch) {
+    // `rotateAfterSeconds` is age-based; mark for rotation but defer
+    // the id swap to the next mutation for the same Set-Cookie reason.
+    if (outcome.rotate) rotateOnNext = true;
+
+    const wantsTouch = outcome.touch || nextDevice !== undefined || rotateOnNext;
+    if (wantsTouch) {
       const updated: SessionRecord<T> = {
         meta: {
           ...record.meta,
+          ...(nextDevice !== undefined ? { device: nextDevice } : {}),
+          ...(rotateOnNext ? { rotatePending: true } : {}),
           lastSeenAt: now,
           expiresAt: extendExpiry(record.meta, now, expiration),
         },
         data: record.data,
       };
-      await store.update(updated).catch(() => undefined);
+      if (!codec) await store.update(updated).catch(() => undefined);
       record = updated;
     }
 
     emit({ type: 'session.read', sessionId: record.meta.id, at: now });
     return record;
+  };
+
+  /**
+   * Decide whether the next mutation should also rotate the id+csrf.
+   * Triggered by the deferred-rotate flag set in `readActive` or by
+   * the age-based policy threshold being crossed.
+   */
+  const shouldRotateOnMutation = (record: SessionRecord<T>, now: number): boolean => {
+    if (record.meta.rotatePending === true) return true;
+    return expiration.rotateAfterSeconds > 0 &&
+      now - record.meta.createdAt >= expiration.rotateAfterSeconds;
   };
 
   const enforceConcurrency = async (
@@ -305,7 +350,21 @@ export function createSessionManager<T extends SessionData = SessionData>(
     }
   };
 
+  const featureNames: ReadonlySet<'audit' | 'csrf' | 'fingerprint' | 'concurrency'> = new Set(
+    [
+      auditFeature ? 'audit' : undefined,
+      csrfFeature ? 'csrf' : undefined,
+      fingerprintFeature ? 'fingerprint' : undefined,
+      concurrencyFeature ? 'concurrency' : undefined,
+    ].filter((x): x is 'audit' | 'csrf' | 'fingerprint' | 'concurrency' => x !== undefined),
+  );
+
+  const csrfOptedOut = config.csrf === false;
+
   const manager: SessionManager<T> = {
+    __features: featureNames,
+    __csrfOptedOut: csrfOptedOut,
+
     async get(req) {
       return readActive(req);
     },
@@ -350,28 +409,71 @@ export function createSessionManager<T extends SessionData = SessionData>(
     },
 
     async update(req, mutator) {
-      const record = await readActive(req);
-      if (!record) throw new SessionError('NOT_FOUND', 'no active session to update');
-      const nextData = await mutator(record.data);
-      const now = clock();
-      const userId = getUserId?.(nextData);
-      const updated: SessionRecord<T> = {
-        meta: {
-          ...record.meta,
-          ...(userId !== undefined ? { userId } : {}),
-          lastSeenAt: now,
-          expiresAt: extendExpiry(record.meta, now, expiration),
-        },
-        data: nextData,
-      };
-      const ok = await store.update(updated);
-      if (!ok) throw new SessionError('CONFLICT', 'store rejected update');
-      emit({ type: 'session.updated', sessionId: updated.meta.id, at: now });
-      return buildAttachment(
-        updated,
-        buildCookieValue(updated),
-        cookieMaxAge(updated.meta, now),
-      );
+      let current = await readActive(req);
+      if (!current) throw new SessionError('NOT_FOUND', 'no active session to update');
+      // Retry once on CAS-style conflict: the store reports `false`
+      // from `update` when the record is gone (concurrent signOut /
+      // sweep, or the id rotated under us). We re-read, re-run the
+      // mutator, and try a second time before giving up.
+      let attempt = 0;
+      while (true) {
+        const nextData = await mutator(current.data);
+        const now = clock();
+        const userId = getUserId?.(nextData);
+        const rotateNow = shouldRotateOnMutation(current, now);
+
+        if (rotateNow) {
+          // Consume `rotatePending` and any age-triggered rotation by
+          // minting a fresh id+csrf alongside the data update.
+          const rotated: SessionRecord<T> = {
+            meta: {
+              ...current.meta,
+              ...(userId !== undefined ? { userId } : {}),
+              id: generateSessionId(),
+              csrf: generateCsrfToken(),
+              rotatePending: false,
+              lastSeenAt: now,
+              expiresAt: extendExpiry(current.meta, now, expiration),
+            },
+            data: nextData,
+          };
+          if (!codec) {
+            await store.create(rotated);
+            await store.delete(current.meta.id).catch(() => undefined);
+          }
+          emit({ type: 'session.rotated', oldId: current.meta.id, newId: rotated.meta.id, at: now });
+          emit({ type: 'session.updated', sessionId: rotated.meta.id, at: now });
+          return buildAttachment(rotated, buildCookieValue(rotated), cookieMaxAge(rotated.meta, now));
+        }
+
+        const updated: SessionRecord<T> = {
+          meta: {
+            ...current.meta,
+            ...(userId !== undefined ? { userId } : {}),
+            lastSeenAt: now,
+            expiresAt: extendExpiry(current.meta, now, expiration),
+          },
+          data: nextData,
+        };
+        const ok = codec ? true : await store.update(updated);
+        if (ok) {
+          emit({ type: 'session.updated', sessionId: updated.meta.id, at: now });
+          return buildAttachment(
+            updated,
+            buildCookieValue(updated),
+            cookieMaxAge(updated.meta, now),
+          );
+        }
+        attempt++;
+        if (attempt >= 2) {
+          throw new SessionError('CONFLICT', 'store rejected update');
+        }
+        const refreshed = await readActive(req);
+        if (!refreshed) {
+          throw new SessionError('CONFLICT', 'session disappeared mid-update');
+        }
+        current = refreshed;
+      }
     },
 
     async rotate(req) {
@@ -385,13 +487,26 @@ export function createSessionManager<T extends SessionData = SessionData>(
           ...record.meta,
           id: newId,
           csrf: newCsrf,
+          rotatePending: false,
           lastSeenAt: now,
           expiresAt: extendExpiry(record.meta, now, expiration),
         },
         data: record.data,
       };
-      await store.create(rotated);
-      await store.delete(record.meta.id).catch(() => undefined);
+      if (!codec) {
+        await store.create(rotated);
+        try {
+          await store.delete(record.meta.id);
+        } catch (err) {
+          // The new record is live; the old one survived. Surface the
+          // failure rather than silently doubling concurrency-counted
+          // sessions and leaving a revoke-resistant stale record. The
+          // caller can retry; the new id+csrf are not yet observed by
+          // the client because we haven't returned the attachment.
+          if (SessionError.is(err)) throw err;
+          throw new SessionError('STORE_UNAVAILABLE', 'rotate: store.delete failed', err);
+        }
+      }
       emit({ type: 'session.rotated', oldId: record.meta.id, newId, at: now });
       return buildAttachment(
         rotated,
@@ -410,8 +525,19 @@ export function createSessionManager<T extends SessionData = SessionData>(
           id = verifySessionId(cookieValue, sigKeys);
         }
       }
+      if (id && !codec) {
+        // Surface infra failures: a logout that returns 204 while
+        // Redis is down would leave the session live server-side.
+        // SessionError instances pass through; everything else is
+        // re-wrapped as STORE_UNAVAILABLE.
+        try {
+          await store.delete(id);
+        } catch (err) {
+          if (SessionError.is(err)) throw err;
+          throw new SessionError('STORE_UNAVAILABLE', 'signOut: store.delete failed', err);
+        }
+      }
       if (id) {
-        await store.delete(id).catch(() => undefined);
         emit({ type: 'session.destroyed', sessionId: id, reason: 'logout', at: clock() });
       }
       const headers = new Headers();

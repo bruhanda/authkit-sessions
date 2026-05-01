@@ -1,50 +1,36 @@
 import { coerceSecret, deriveEncKey, validateSecret } from '../../crypto/kdf.js';
 import { SessionError } from '../../errors/base.js';
 import type { SessionData, SessionRecord } from '../../types/session.js';
-import type { SessionStore } from '../../types/store.js';
+import type { SessionStore, StatelessCookieCodec } from '../../types/store.js';
 import { DEFAULT_COOKIE_MAX_BYTES, guardCookieSize } from './compact.js';
 import { openRecord, sealRecord } from './seal.js';
 
 /**
- * Create a stateless, encrypted-cookie session store.
- *
- * The cookie carries the entire AEAD-sealed `SessionRecord` — there is
- * no server-side database. Best fit for stateless serverless functions
- * where you accept that:
- *   - Server-side instant `revoke` is impossible (the cookie itself is
- *     the source of truth — only `signOut()` from the same browser can
- *     drop it). For revocation needs, pair with a stateful store.
- *   - `listByUser` returns `[]` (no cross-device index possible) — so
- *     `concurrency` becomes a no-op against this adapter.
- *   - The encoded payload must fit under `maxBytes` (default 3072) —
- *     browsers reject larger cookies. Throws `PAYLOAD_TOO_LARGE` when
- *     exceeded; never silently truncates.
- *
- * Secrets are passed in directly (rather than reused from
- * `SessionConfig.secrets`) because the store must derive its own AEAD
- * key from them; the manager does not share derived keys with stores.
+ * Construct the stateless cookie codec — the AEAD seal/open pair that
+ * makes the manager carry the entire `SessionRecord` inside the
+ * session cookie. Pair with `createCookieStore` (a no-op stub used as
+ * `SessionConfig.store`).
  *
  * @typeParam T  Session payload shape.
- * @param secrets  One or more secrets ≥256 bits each. The first is the
- *                 active sealing key; the rest are accepted on read for
- *                 zero-downtime rotation.
- * @param opts.maxBytes  Hard ceiling on encoded cookie length. Default 3072.
- * @returns A `SessionStore` whose `__codec` triggers the manager's
- *          stateless cookie path.
- * @throws {SessionError} `SECRET_TOO_SHORT` when any secret carries
- *                        <256 bits of entropy.
+ * @param opts.secrets  One or more secrets ≥256 bits each. The first
+ *                      is the active sealing key; the rest verify
+ *                      old cookies during rotation.
+ * @param opts.maxBytes Hard ceiling on encoded cookie length. Default 3072.
+ * @returns A `StatelessCookieCodec<T>` to assign to `SessionConfig.cookieCodec`.
+ * @throws {SessionError} `SECRET_TOO_SHORT` for a secret <256 bits.
  *
  * @example
- *   import { createCookieStore } from '@authkit/sessions/adapters/cookie';
+ *   import { createCookieCodec, createCookieStore } from '@authkit/sessions/adapters/cookie';
  *   const sessions = createSessionManager({
  *     secrets: [SECRET],
- *     store: createCookieStore({ secrets: [SECRET] }),
+ *     store: createCookieStore(),
+ *     cookieCodec: createCookieCodec({ secrets: [SECRET] }),
  *   });
  */
-export function createCookieStore<T extends SessionData = SessionData>(opts: {
+export function createCookieCodec<T extends SessionData = SessionData>(opts: {
   secrets: string | Uint8Array | readonly (string | Uint8Array)[];
   maxBytes?: number;
-}): SessionStore<T> {
+}): StatelessCookieCodec<T> {
   const list: readonly (string | Uint8Array)[] =
     typeof opts.secrets === 'string' || opts.secrets instanceof Uint8Array
       ? [opts.secrets]
@@ -54,22 +40,49 @@ export function createCookieStore<T extends SessionData = SessionData>(opts: {
     validateSecret(bytes);
     return deriveEncKey(bytes);
   });
-  if (keys.length === 0) {
-    throw new SessionError('CONFIG_INVALID', 'cookie store requires at least one secret');
-  }
   const [activeKey, ...otherKeys] = keys;
   if (!activeKey) {
-    throw new SessionError('CONFIG_INVALID', 'cookie store requires at least one secret');
+    throw new SessionError('CONFIG_INVALID', 'cookie codec requires at least one secret');
   }
   const maxBytes = opts.maxBytes ?? DEFAULT_COOKIE_MAX_BYTES;
+  return {
+    encode(record: SessionRecord<T>): string {
+      const value = sealRecord(record, activeKey);
+      guardCookieSize(value, maxBytes);
+      return value;
+    },
+    decode(value: string): SessionRecord<T> | null {
+      return openRecord<T>(value, [activeKey, ...otherKeys]);
+    },
+  };
+}
 
+/**
+ * Construct the no-op stub store the manager pairs with `cookieCodec`
+ * for the stateless cookie path. The cookie envelope IS the storage:
+ *   - `read` always returns `null` (the manager goes through the codec).
+ *   - Mutating ops are no-ops.
+ *   - `listByUser` returns `[]` — no cross-device index is possible —
+ *     so `concurrency` becomes a no-op against this adapter (the
+ *     manager emits a one-shot dev warning when both are wired).
+ *
+ * @typeParam T  Session payload shape.
+ * @returns A no-op `SessionStore<T>`.
+ *
+ * @example
+ *   import { createCookieStore, createCookieCodec } from '@authkit/sessions/adapters/cookie';
+ *   const sessions = createSessionManager({
+ *     secrets: [SECRET],
+ *     store: createCookieStore(),
+ *     cookieCodec: createCookieCodec({ secrets: [SECRET] }),
+ *   });
+ */
+export function createCookieStore<T extends SessionData = SessionData>(): SessionStore<T> {
   return {
     async create() {
       // No-op — the cookie envelope IS the storage.
     },
     async read() {
-      // The manager materializes records via `__codec.decode` and
-      // never calls `read()` for cookie-store cookies.
       return null;
     },
     async update() {
@@ -83,16 +96,6 @@ export function createCookieStore<T extends SessionData = SessionData>(opts: {
     },
     async deleteByUser() {
       return 0;
-    },
-    __codec: {
-      encode(record: SessionRecord<T>): string {
-        const value = sealRecord(record, activeKey);
-        guardCookieSize(value, maxBytes);
-        return value;
-      },
-      decode(value: string): SessionRecord<T> | null {
-        return openRecord<T>(value, [activeKey, ...otherKeys]);
-      },
     },
   };
 }

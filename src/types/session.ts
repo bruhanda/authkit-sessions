@@ -28,6 +28,16 @@ export interface SessionMetadata {
   readonly device?: Device;
   /** Per-session CSRF token; rotated together with `id` on rotate(). */
   readonly csrf: string;
+  /**
+   * Set by `manager.get` when a rotation condition fired during a read
+   * (`rotateAfterSeconds` elapsed, or fingerprint mismatch with
+   * `onMismatch: 'rotate'`). The next `update` / `rotate` mutation
+   * consumes the flag and mints a fresh `id` + `csrf`. Inline-rotating
+   * on read would orphan the browser cookie because read paths cannot
+   * emit `Set-Cookie` — the deferred consume keeps the round-trip
+   * sound.
+   */
+  readonly rotatePending?: boolean;
   /** Envelope schema version — read-only, used for forward compatibility. */
   readonly v: 1;
 }
