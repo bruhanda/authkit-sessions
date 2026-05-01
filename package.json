@@ -1,0 +1,330 @@
+{
+  "name": "@authkit/sessions",
+  "version": "0.1.0",
+  "description": "Universal, TypeScript-first, edge-runtime-native session layer with pluggable storage adapters. <6KB gzipped, runs in Node, Bun, Deno, Cloudflare Workers and Vercel Edge. Lucia-deprecation alternative with instant revoke, concurrent session limits and device tracking.",
+  "license": "MIT",
+  "author": "Vasyl Bruhanda",
+  "homepage": "https://github.com/bruhanda/authkit-sessions#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bruhanda/authkit-sessions.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bruhanda/authkit-sessions/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./errors": {
+      "types": "./dist/errors/index.d.ts",
+      "import": "./dist/errors/index.js"
+    },
+    "./crypto": {
+      "types": "./dist/crypto/index.d.ts",
+      "import": "./dist/crypto/index.js"
+    },
+    "./adapters/memory": {
+      "types": "./dist/adapters/memory/index.d.ts",
+      "import": "./dist/adapters/memory/index.js"
+    },
+    "./adapters/cookie": {
+      "types": "./dist/adapters/cookie/index.d.ts",
+      "import": "./dist/adapters/cookie/index.js"
+    },
+    "./adapters/redis": {
+      "types": "./dist/adapters/redis/index.d.ts",
+      "import": "./dist/adapters/redis/index.js"
+    },
+    "./adapters/upstash": {
+      "types": "./dist/adapters/upstash/index.d.ts",
+      "import": "./dist/adapters/upstash/index.js"
+    },
+    "./adapters/cloudflare-kv": {
+      "types": "./dist/adapters/cloudflare-kv/index.d.ts",
+      "import": "./dist/adapters/cloudflare-kv/index.js"
+    },
+    "./adapters/cloudflare-d1": {
+      "types": "./dist/adapters/cloudflare-d1/index.d.ts",
+      "import": "./dist/adapters/cloudflare-d1/index.js"
+    },
+    "./adapters/postgres": {
+      "types": "./dist/adapters/postgres/index.d.ts",
+      "import": "./dist/adapters/postgres/index.js"
+    },
+    "./adapters/durable-object": {
+      "types": "./dist/adapters/durable-object/index.d.ts",
+      "import": "./dist/adapters/durable-object/index.js"
+    },
+    "./frameworks/hono": {
+      "types": "./dist/frameworks/hono/index.d.ts",
+      "import": "./dist/frameworks/hono/index.js"
+    },
+    "./frameworks/elysia": {
+      "types": "./dist/frameworks/elysia/index.d.ts",
+      "import": "./dist/frameworks/elysia/index.js"
+    },
+    "./frameworks/next": {
+      "types": "./dist/frameworks/next/index.d.ts",
+      "import": "./dist/frameworks/next/index.js"
+    },
+    "./frameworks/remix": {
+      "types": "./dist/frameworks/remix/index.d.ts",
+      "import": "./dist/frameworks/remix/index.js"
+    },
+    "./frameworks/sveltekit": {
+      "types": "./dist/frameworks/sveltekit/index.d.ts",
+      "import": "./dist/frameworks/sveltekit/index.js"
+    },
+    "./frameworks/express": {
+      "types": "./dist/frameworks/express/index.d.ts",
+      "import": "./dist/frameworks/express/index.js"
+    },
+    "./frameworks/fastify": {
+      "types": "./dist/frameworks/fastify/index.d.ts",
+      "import": "./dist/frameworks/fastify/index.js"
+    },
+    "./frameworks/h3": {
+      "types": "./dist/frameworks/h3/index.d.ts",
+      "import": "./dist/frameworks/h3/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "session",
+    "sessions",
+    "session-management",
+    "session-store",
+    "cookie",
+    "cookies",
+    "auth",
+    "authentication",
+    "csrf",
+    "edge",
+    "edge-runtime",
+    "cloudflare-workers",
+    "cloudflare-kv",
+    "cloudflare-d1",
+    "vercel-edge",
+    "bun",
+    "deno",
+    "hono",
+    "elysia",
+    "nextjs",
+    "remix",
+    "sveltekit",
+    "express",
+    "fastify",
+    "typescript",
+    "type-safe",
+    "lucia",
+    "lucia-alternative",
+    "iron-session-alternative",
+    "redis-session",
+    "device-management",
+    "concurrent-sessions"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:types": "vitest run --typecheck",
+    "test:coverage": "vitest run --coverage",
+    "bench": "vitest bench",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "size": "size-limit",
+    "publint": "publint",
+    "attw": "attw --pack .",
+    "release": "changeset publish",
+    "prepublishOnly": "npm run build && npm run publint && npm run attw && npm run size"
+  },
+  "dependencies": {
+    "@noble/ciphers": "^1.0.0",
+    "@noble/hashes": "^1.5.0"
+  },
+  "peerDependencies": {
+    "@sveltejs/kit": ">=2 <3",
+    "@upstash/redis": ">=1.34 <2",
+    "elysia": ">=1.1 <2",
+    "express": ">=4 <6",
+    "fastify": ">=4 <6",
+    "h3": ">=1.13 <2",
+    "hono": ">=4 <5",
+    "next": ">=13.4 <16",
+    "react-router": ">=7 <8"
+  },
+  "peerDependenciesMeta": {
+    "@sveltejs/kit": {
+      "optional": true
+    },
+    "@upstash/redis": {
+      "optional": true
+    },
+    "elysia": {
+      "optional": true
+    },
+    "express": {
+      "optional": true
+    },
+    "fastify": {
+      "optional": true
+    },
+    "h3": {
+      "optional": true
+    },
+    "hono": {
+      "optional": true
+    },
+    "next": {
+      "optional": true
+    },
+    "react-router": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.16.0",
+    "@biomejs/biome": "^1.9.0",
+    "@changesets/cli": "^2.27.0",
+    "@cloudflare/vitest-pool-workers": "^0.5.0",
+    "@cloudflare/workers-types": "^4.20240925.0",
+    "@size-limit/preset-small-lib": "^11.1.0",
+    "@sveltejs/kit": "^2.7.0",
+    "@types/express": "^4.17.0",
+    "@types/node": "^22.0.0",
+    "@upstash/redis": "^1.34.0",
+    "@vitest/coverage-v8": "^2.0.0",
+    "elysia": "^1.1.0",
+    "express": "^4.19.0",
+    "fastify": "^4.28.0",
+    "h3": "^1.13.0",
+    "hono": "^4.6.0",
+    "ioredis-mock": "^8.9.0",
+    "miniflare": "^3.20240925.0",
+    "next": "^14.2.0",
+    "pg-mem": "^3.0.0",
+    "publint": "^0.2.0",
+    "react-router": "^7.0.0",
+    "size-limit": "^11.1.0",
+    "supertest": "^7.0.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
+  },
+  "size-limit": [
+    {
+      "name": "core",
+      "path": "dist/index.js",
+      "limit": "6 KB"
+    },
+    {
+      "name": "errors",
+      "path": "dist/errors/index.js",
+      "limit": "0.4 KB"
+    },
+    {
+      "name": "crypto",
+      "path": "dist/crypto/index.js",
+      "limit": "2 KB"
+    },
+    {
+      "name": "adapters/memory",
+      "path": "dist/adapters/memory/index.js",
+      "limit": "0.5 KB"
+    },
+    {
+      "name": "adapters/cookie",
+      "path": "dist/adapters/cookie/index.js",
+      "limit": "0.8 KB"
+    },
+    {
+      "name": "adapters/redis",
+      "path": "dist/adapters/redis/index.js",
+      "limit": "1.2 KB"
+    },
+    {
+      "name": "adapters/upstash",
+      "path": "dist/adapters/upstash/index.js",
+      "limit": "1 KB"
+    },
+    {
+      "name": "adapters/cloudflare-kv",
+      "path": "dist/adapters/cloudflare-kv/index.js",
+      "limit": "0.9 KB"
+    },
+    {
+      "name": "adapters/cloudflare-d1",
+      "path": "dist/adapters/cloudflare-d1/index.js",
+      "limit": "1.1 KB"
+    },
+    {
+      "name": "adapters/postgres",
+      "path": "dist/adapters/postgres/index.js",
+      "limit": "1.3 KB"
+    },
+    {
+      "name": "adapters/durable-object",
+      "path": "dist/adapters/durable-object/index.js",
+      "limit": "0.7 KB"
+    },
+    {
+      "name": "frameworks/hono",
+      "path": "dist/frameworks/hono/index.js",
+      "limit": "0.6 KB"
+    },
+    {
+      "name": "frameworks/elysia",
+      "path": "dist/frameworks/elysia/index.js",
+      "limit": "0.6 KB"
+    },
+    {
+      "name": "frameworks/next",
+      "path": "dist/frameworks/next/index.js",
+      "limit": "1 KB"
+    },
+    {
+      "name": "frameworks/remix",
+      "path": "dist/frameworks/remix/index.js",
+      "limit": "0.7 KB"
+    },
+    {
+      "name": "frameworks/sveltekit",
+      "path": "dist/frameworks/sveltekit/index.js",
+      "limit": "0.7 KB"
+    },
+    {
+      "name": "frameworks/express",
+      "path": "dist/frameworks/express/index.js",
+      "limit": "0.8 KB"
+    },
+    {
+      "name": "frameworks/fastify",
+      "path": "dist/frameworks/fastify/index.js",
+      "limit": "0.7 KB"
+    },
+    {
+      "name": "frameworks/h3",
+      "path": "dist/frameworks/h3/index.js",
+      "limit": "0.6 KB"
+    }
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
