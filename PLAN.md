@@ -1,10 +1,15 @@
 # `@authkit/sessions` — Architecture Plan
 
 > Universal, **TypeScript-first**, **edge-runtime-native** session layer with
-> pluggable storage adapters. Targets **<6 KB gzipped** for the core engine
-> (the cookie-only, zero-store path is **<4.5 KB**) and runs unmodified in
-> **Node 20+, Bun 1.0+, Deno 1.40+, Cloudflare Workers, Vercel Edge, Netlify
-> Edge** through Web Standards (`Request`, `Response`, `Headers`, `crypto`).
+> pluggable storage adapters. The **cookie+crypto-only core** targets
+> **≤5 KB gzipped of library code** (≈11 KB including the `@noble/ciphers` +
+> `@noble/hashes` runtime deps); each opt-in feature module (`csrf`,
+> `fingerprint`, `concurrency`, `audit`) is its own subpath import that adds
+> ~0.3–0.7 KB only when consumed. A realistic browser-app build with cookies
+> + Redis + CSRF + concurrency lands around **~8 KB of library code**, which
+> we publish as the honest headline number. Runs unmodified in **Node 20+,
+> Bun 1.0+, Deno 1.40+, Cloudflare Workers, Vercel Edge, Netlify Edge**
+> through Web Standards (`Request`, `Response`, `Headers`, `crypto`).
 > Optional, tree-shakeable adapters for **8 stores** (cookie, memory, Redis,
 > Upstash, Cloudflare KV, Cloudflare D1, Postgres, Durable Objects) and **9
 > frameworks** (Hono, Elysia, Next.js App Router + middleware, Remix / React
@@ -74,9 +79,9 @@ authkit-sessions/
 │   │
 │   ├── core/
 │   │   ├── manager.ts               # createSessionManager() — central orchestrator
-│   │   │                            # - composes lifecycle, store, cookie, audit
+│   │   │                            # - composes lifecycle, store, cookie, features
 │   │   │                            # - returns frozen manager handle
-│   │   ├── lifecycle.ts             # pure get/create/update/rotate/destroy steps
+│   │   ├── lifecycle.ts             # pure get/create/update/rotate/signOut steps
 │   │   │                            # - decoupled from Request/Response shape so
 │   │   │                            #   framework adapters can reuse them
 │   │   ├── id.ts                    # generateSessionId() — 256-bit URL-safe random
@@ -88,17 +93,29 @@ authkit-sessions/
 │   │   │                            # - the only file that touches Request/Headers
 │   │   ├── expiration.ts            # sliding + absolute window arithmetic
 │   │   │                            # - returns ExpirationOutcome union
-│   │   ├── revoke.ts                # revokeBySessionId / byUser / byDevice helpers
-│   │   ├── concurrency.ts           # enforceConcurrency() — LRU / FIFO / deny-new
-│   │   │                            # - delegates atomicity to the store; this
-│   │   │                            #   file only orchestrates the policy
-│   │   ├── fingerprint.ts           # buildFingerprint(req, cfg) — UA+IP HMAC
-│   │   │                            # - never stores raw IP; always hashed
-│   │   ├── csrf.ts                  # double-submit token issue + verify
-│   │   ├── audit.ts                 # composeAuditHook + default JSON formatter
+│   │   ├── revoke.ts                # revokeBySessionId / byUser helpers
+│   │   ├── feature.ts               # SessionFeature contract + lifecycle hook types
+│   │   │                            # - the manager invokes hooks; features stay
+│   │   │                            #   in their own subpaths (see features/)
 │   │   ├── encoder.ts               # encodeRecord / decodeRecord — JSON+base64url
 │   │   │                            # - SemVer-tagged envelope for forward compat
 │   │   └── time.ts                  # nowSeconds() — single time source for tests
+│   │
+│   ├── features/                    # opt-in feature subpath modules
+│   │   ├── csrf/
+│   │   │   └── index.ts             # createCsrfFeature() — double-submit token
+│   │   │                            # issue + verify; imported & enabled by every
+│   │   │                            # framework adapter unless `csrf: false`.
+│   │   ├── fingerprint/
+│   │   │   └── index.ts             # createFingerprintFeature() — UA / Accept-Language
+│   │   │                            # / sec-ch-ua / optional IP HMAC; never stores
+│   │   │                            # raw IP — always hashed.
+│   │   ├── concurrency/
+│   │   │   └── index.ts             # createConcurrencyFeature() — LRU / FIFO /
+│   │   │                            # deny-new; delegates atomicity to the store.
+│   │   └── audit/
+│   │       └── index.ts             # createAuditFeature() + composeAuditHook +
+│   │                                # default JSON formatter.
 │   │
 │   ├── crypto/
 │   │   ├── index.ts                 # subpath barrel — exposed for advanced users
@@ -131,9 +148,10 @@ authkit-sessions/
 │   │
 │   ├── adapters/
 │   │   ├── memory/
-│   │   │   └── index.ts             # MemoryStoreAdapter — Map<string, record>
-│   │   │                            # - logs a one-time warning in non-test env;
-│   │   │                            #   expressly NOT recommended for prod
+│   │   │   └── index.ts             # createMemoryStore() — Map<string, record>
+│   │   │                            # - test/dev-only; never the default. Has to be
+│   │   │                            #   explicitly imported (the `store` field on
+│   │   │                            #   SessionConfig is required, no fallback).
 │   │   ├── cookie/
 │   │   │   ├── index.ts             # createCookieStore() — stateless adapter
 │   │   │   ├── seal.ts              # encrypt + sign payload (AEAD over JSON)
@@ -194,14 +212,15 @@ authkit-sessions/
 ├── test/
 │   ├── core/
 │   │   ├── manager.test.ts          # full lifecycle matrix
-│   │   ├── lifecycle.test.ts        # create/read/update/rotate/destroy edges
+│   │   ├── lifecycle.test.ts        # create/read/update/rotate/signOut edges
 │   │   ├── cookie.test.ts           # serialize/parse + flag matrix
 │   │   ├── expiration.test.ts       # sliding + absolute + clock skew
-│   │   ├── concurrency.test.ts      # LRU / FIFO / deny-new under contention
+│   │   └── encoder.test.ts          # forward-compat envelope tag
+│   ├── features/
 │   │   ├── csrf.test.ts             # double-submit issue/verify + miss cases
 │   │   ├── fingerprint.test.ts      # mismatch policies + privacy assertions
-│   │   ├── audit.test.ts            # event ordering + composeAuditHook
-│   │   └── encoder.test.ts          # forward-compat envelope tag
+│   │   ├── concurrency.test.ts      # LRU / FIFO / deny-new under contention
+│   │   └── audit.test.ts            # event ordering + composeAuditHook
 │   ├── crypto/
 │   │   ├── aead.test.ts             # AES-GCM round-trip + tampered ciphertext
 │   │   ├── hmac.test.ts             # HMAC + timing-safe compare
@@ -264,12 +283,19 @@ the published `.d.ts` rollup.
  *               a fully typed `record.data` (no manual casts).
  *
  * @example
+ *   import { createSessionManager } from '@authkit/sessions';
+ *   import { createRedisStore } from '@authkit/sessions/adapters/redis';
+ *   import { csrf } from '@authkit/sessions/csrf';
+ *   import { concurrency } from '@authkit/sessions/concurrency';
+ *
  *   type Session = { userId: string; role: 'admin' | 'user' };
  *   const sessions = createSessionManager<Session>({
  *     secrets: [process.env.SESSION_SECRET!],
- *     store: createRedisStore(redis),
+ *     store: createRedisStore(redis),                  // required — no default
+ *     getUserId: (data) => data.userId,                // single source of truth
  *     expiration: { absoluteSeconds: 60 * 60 * 24 * 30, slidingSeconds: 60 * 60 * 24 * 7 },
- *     concurrency: { max: 5, strategy: 'lru' },
+ *     csrf: csrf({ enforceOrigin: true }),             // explicit feature import
+ *     concurrency: concurrency({ max: 5, strategy: 'lru' }),
  *   });
  *
  *   // Inside a Web-standard handler:
@@ -277,8 +303,8 @@ the published `.d.ts` rollup.
  *   if (!session) return new Response('unauthorized', { status: 401 });
  *   //  ^? SessionRecord<Session> | null   — typed via the generic
  *
- *   const { setCookie } = await sessions.create(req, { userId, role: 'user' }, { userId });
- *   return new Response('ok', { headers: { 'set-cookie': setCookie } });
+ *   const { cookie, headers } = await sessions.create(req, { userId, role: 'user' });
+ *   return new Response('ok', { headers });            // Headers carries Set-Cookie
  */
 export function createSessionManager<T extends SessionData = SessionData>(
   config: SessionConfig<T>,
@@ -293,6 +319,7 @@ export type {
   SessionManager,
   SessionAttachment,
   SessionConfig,
+  SessionFeature,
   CookieOptions,
   ExpirationPolicy,
   ConcurrencyPolicy,
@@ -306,6 +333,15 @@ export type {
   Result,
 } from './types/index.js';
 ```
+
+Each opt-in feature lives at its own subpath — `@authkit/sessions/csrf`,
+`/fingerprint`, `/concurrency`, `/audit` — and the user passes the
+constructed feature object into the matching `SessionConfig` slot. The
+core engine has zero static knowledge of these modules: a build that
+never imports `@authkit/sessions/csrf` ships **no CSRF code at all**.
+Framework adapters (`/frameworks/*`) import the secure-default features
+(currently CSRF) themselves so the framework integration is secure
+without ceremony — see §2.5 for the explicit opt-out (`csrf: false`).
 
 ### 2.2 Core types
 
@@ -351,8 +387,14 @@ export interface SessionRecord<T extends SessionData> {
  * live in the manager, NOT the store. A store needs to do four things:
  *   1. Persist a record by its id.
  *   2. Read it back atomically.
- *   3. Drop one (or all of a user's) records.
+ *   3. Delete one (or all of a user's) records.
  *   4. List a user's records cheaply enough for an "active devices" UI.
+ *
+ * Naming convention — the manager **revokes**, the store **deletes**. The
+ * security-flavoured verb (`revoke`) lives on the public surface; the
+ * mechanical verb (`delete`) lives at the persistence layer. The mapping
+ * is one-to-one (`manager.revokeBySessionId → store.delete`,
+ * `manager.revokeByUser → store.deleteByUser`).
  *
  * Stores SHOULD honour native TTL where the backend exposes one (Redis EXPIRE,
  * KV expirationTtl, Postgres `delete where expires_at < now()` cron). Stores
@@ -384,16 +426,16 @@ export interface SessionStore<T extends SessionData = SessionData> {
    */
   update(record: SessionRecord<T>): Promise<boolean>;
 
-  /** Drop a single session. Returns `true` iff something was removed. */
-  destroy(id: string): Promise<boolean>;
+  /** Delete a single session. Returns `true` iff something was removed. */
+  delete(id: string): Promise<boolean>;
 
   /** List active sessions for a user — used by the "active devices" UI and the
    *  concurrency enforcer. Implementations MAY return an empty array if they
    *  cannot index by user (cookie-only adapter); that disables concurrency. */
   listByUser(userId: string): Promise<readonly SessionMetadata[]>;
 
-  /** Drop every session for a user. Used on password change / suspicious activity. */
-  destroyByUser(userId: string): Promise<number>;
+  /** Delete every session for a user. Used on password change / suspicious activity. */
+  deleteByUser(userId: string): Promise<number>;
 
   /**
    * Optional bulk garbage collection of expired records. Stores with native
@@ -418,18 +460,18 @@ export interface SessionManager<T extends SessionData = SessionData> {
   get(req: Request): Promise<SessionRecord<T> | null>;
 
   /**
-   * Create a new session. Returns the record and the `Set-Cookie` header that
-   * MUST be attached to the outgoing response. `applyTo()` is a convenience
-   * for callers that already have a `ResponseInit`.
+   * Create a new session. Returns the record and a Headers object pre-filled
+   * with the `Set-Cookie`. The `userId` is extracted from `data` via
+   * `config.getUserId`; the caller never passes it twice.
    *
    * @example
-   *   const { record, applyTo } = await sessions.create(req, { userId }, { userId });
-   *   return new Response(JSON.stringify(record.data), applyTo({ status: 201 }));
+   *   const { record, headers } = await sessions.create(req, { userId, role });
+   *   return new Response(JSON.stringify(record.data), { status: 201, headers });
    */
   create(
     req: Request,
     data: T,
-    opts?: { userId?: string; device?: Partial<Device> },
+    opts?: { device?: Partial<Device> },
   ): Promise<SessionAttachment<T>>;
 
   /**
@@ -437,7 +479,9 @@ export interface SessionManager<T extends SessionData = SessionData> {
    * returns the next; replacement is intentional — there is no `set(key,
    * value)` API because partial writes complicate type inference for `T`.
    *
-   * If there is no active session, throws `SessionError('NOT_FOUND')`.
+   * If there is no active session, throws `SessionError('NOT_FOUND')`. The
+   * `userId` re-extraction (via `config.getUserId`) runs on the post-state,
+   * so account-merge flows that rewrite `data.userId` are tracked correctly.
    */
   update(
     req: Request,
@@ -449,21 +493,21 @@ export interface SessionManager<T extends SessionData = SessionData> {
    * fixation attacks — call after privilege changes (login, password change,
    * MFA upgrade). The CSRF token is rotated alongside the id.
    *
-   * Returns the new `Set-Cookie` and a `record.meta.id` distinct from before.
+   * Returns a fresh `Set-Cookie` and a `record.meta.id` distinct from before.
    */
   rotate(req: Request): Promise<SessionAttachment<T>>;
 
   /**
-   * Destroy the active session and return an expiring `Set-Cookie`. Idempotent
-   * — destroying an already-gone session is a no-op and still returns the
-   * expiring cookie so the browser drops its copy.
+   * End the active session for the current request and return an expiring
+   * `Set-Cookie` so the browser drops its copy. Idempotent. Internally calls
+   * `store.delete(id)` and emits `session.destroyed { reason: 'logout' }`.
    */
-  destroy(req: Request): Promise<SessionAttachment<null>>;
+  signOut(req: Request): Promise<SessionAttachment<null>>;
 
   /**
    * Operational APIs for admin tooling and "log out everywhere" buttons.
    * They DO NOT touch `req` because they are typically called from background
-   * jobs / RPC handlers that don't have one.
+   * jobs / RPC handlers that don't have one. Both call into `store.delete*`.
    */
   revokeBySessionId(id: string): Promise<boolean>;
   revokeByUser(userId: string): Promise<number>;
@@ -485,18 +529,28 @@ export interface SessionManager<T extends SessionData = SessionData> {
 }
 
 /**
- * The result of any mutating operation. Includes the post-state record and a
- * fully-formed `Set-Cookie` string. `applyTo()` is the recommended API — it
- * appends to an existing `ResponseInit` without clobbering pre-set headers.
+ * The result of any mutating operation. Two ways to consume it, both
+ * idiomatic for the Web Standards `Request`/`Response` ecosystem:
+ *
+ *   1. `headers` — a fresh `Headers` with the `Set-Cookie` already appended.
+ *      Pass it directly to `new Response(body, { headers })`. The CSRF
+ *      feature, when enabled, appends its mirror cookie into the same
+ *      `Headers` so a single object carries everything.
+ *
+ *   2. `cookie` — the raw `Set-Cookie` string. Drop into a framework's
+ *      typed cookie store (`event.cookies.set(...)`, `c.header('set-cookie',...)`)
+ *      when the framework owns header composition.
+ *
+ * `attachTo(headers)` is the merge helper — appends every Set-Cookie this
+ * attachment carries into a caller-provided `Headers` without clobbering
+ * existing entries. Use it when composing with response headers your
+ * handler already built up.
  */
 export interface SessionAttachment<T extends SessionData | null> {
   readonly record: T extends null ? null : SessionRecord<NonNullable<T>>;
-  readonly setCookie: string;
-  /**
-   * Merge the attachment into a `ResponseInit`. Existing `Set-Cookie` headers
-   * are preserved (multiple cookies, e.g. session + CSRF mirror, are allowed).
-   */
-  readonly applyTo: (init?: ResponseInit) => ResponseInit;
+  readonly cookie: string;
+  readonly headers: Headers;
+  readonly attachTo: (headers: Headers) => Headers;
 }
 ```
 
@@ -505,18 +559,40 @@ export interface SessionAttachment<T extends SessionData | null> {
 ```ts
 export interface SessionConfig<T extends SessionData = SessionData> {
   /**
-   * One or more 32+ byte secrets. The first is the active key (used for new
-   * cookies / signatures); the rest are accepted on read for zero-downtime
-   * rotation. Strings are interpreted as UTF-8 and HKDF-stretched — no need
-   * to base64-encode random material yourself.
+   * One or more secrets carrying ≥256 bits of entropy each (32 random bytes,
+   * or a base64url-encoded equivalent). The first is the active key (used
+   * for new cookies / signatures); the rest are accepted on read for
+   * zero-downtime rotation. Strings are interpreted as UTF-8 and
+   * HKDF-stretched — HKDF itself works on any input length, but anything
+   * with less than 256 bits of entropy is below our security floor.
    *
-   * MUST be ≥32 bytes after decoding. Shorter secrets throw
-   * `SessionError('SECRET_TOO_SHORT')` at manager construction time.
+   * Throws `SessionError('SECRET_TOO_SHORT')` at construction time with a
+   * message that names the entropy threshold (not just the byte count) so
+   * users with a short hex key understand they didn't pick a weak primitive,
+   * they picked a weak input.
    */
   secrets: string | Uint8Array | readonly (string | Uint8Array)[];
 
-  /** Storage adapter. Defaults to MemoryStore with a one-shot dev warning. */
-  store?: SessionStore<T>;
+  /**
+   * Storage adapter. **Required** — there is no default. The TypeScript
+   * compiler forces the choice; consumers wanting a dev/test in-memory store
+   * must explicitly `import { createMemoryStore } from '@authkit/sessions/adapters/memory'`.
+   * This avoids the express-session footgun where an unconfigured production
+   * deployment silently accumulates state in a leaky `Map`.
+   */
+  store: SessionStore<T>;
+
+  /**
+   * Single source of truth for "which user owns this session". Runs on
+   * `create()` and after every `update()` mutator; the result is stored in
+   * `meta.userId` and consumed by `revokeByUser` / concurrency / `listByUser`.
+   * Return `undefined` for anonymous / pre-auth sessions (those still get a
+   * session id but cannot be looked up by user).
+   *
+   * @example
+   *   getUserId: (data) => data.userId
+   */
+  getUserId?: (data: T) => string | undefined;
 
   /** Cookie name for the session id. Default `'sid'`. */
   cookieName?: string;
@@ -527,17 +603,28 @@ export interface SessionConfig<T extends SessionData = SessionData> {
   /** Expiration policy — sliding + absolute. */
   expiration?: ExpirationPolicy;
 
-  /** Concurrent session limits. Off by default. */
-  concurrency?: ConcurrencyPolicy;
+  /**
+   * CSRF protection. Constructed from `@authkit/sessions/csrf`.
+   *
+   * - **Framework adapters** (`/frameworks/*`) import and enable CSRF by
+   *   default with `Lax` cookies + Origin enforcement. Pure API services
+   *   that don't need it pass `csrf: false` to opt out.
+   * - **Raw `createSessionManager`** users opt in by importing `csrf` from
+   *   the subpath and assigning it here. The README has a security warning
+   *   that browser-bound sessions without CSRF are unsafe.
+   *
+   * Set to `false` to explicitly disable in framework adapters.
+   */
+  csrf?: SessionFeature | false;
 
-  /** Device fingerprinting. Off by default — opt-in for privacy. */
-  fingerprint?: FingerprintConfig;
+  /** Concurrent session limits. Constructed from `@authkit/sessions/concurrency`. Off when omitted. */
+  concurrency?: SessionFeature;
 
-  /** CSRF protection. Off by default — opt-in per app. */
-  csrf?: CsrfConfig;
+  /** Device fingerprinting. Constructed from `@authkit/sessions/fingerprint`. Off when omitted. */
+  fingerprint?: SessionFeature;
 
-  /** Audit hook fired on every lifecycle event. */
-  audit?: AuditHook;
+  /** Audit hooks. Constructed from `@authkit/sessions/audit`. Off when omitted. */
+  audit?: SessionFeature;
 
   /**
    * Clock injector for tests. Returns Unix seconds. Defaults to
@@ -545,6 +632,17 @@ export interface SessionConfig<T extends SessionData = SessionData> {
    * fast-forward through expiration without fake timers.
    */
   clock?: () => number;
+}
+
+/**
+ * Opaque feature handle. The user constructs one by calling
+ * `csrf({...})` / `fingerprint({...})` / `concurrency({...})` / `audit({...})`
+ * imported from the matching subpath. The internal shape (`name`,
+ * lifecycle hooks) is intentionally private; the manager invokes hooks
+ * during request processing.
+ */
+export interface SessionFeature {
+  readonly __feature: 'csrf' | 'fingerprint' | 'concurrency' | 'audit';
 }
 
 export interface CookieOptions {
@@ -605,7 +703,15 @@ export interface ConcurrencyPolicy {
 export type EvictionStrategy = 'lru' | 'fifo' | 'deny-new';
 
 export interface FingerprintConfig {
-  /** Components included in the fingerprint hash. */
+  /**
+   * Components included in the fingerprint hash. **Default**:
+   * `['user-agent', 'accept-language', 'sec-ch-ua']`. Without IP this gives
+   * roughly 12–16 bits of entropy per request — enough to distinguish
+   * Chrome-on-Linux from Safari-on-iOS but not two Chrome users. Adding
+   * `'ip'` raises entropy substantially at the cost of mobile-roam churn;
+   * pair it with `onMismatch: 'rotate'` (the default) to avoid kicking
+   * legitimate users on carrier IP changes.
+   */
   include?: readonly ('user-agent' | 'accept-language' | 'ip' | 'sec-ch-ua')[];
   /**
    * IP extractor — required if `'ip'` is in `include`. Defaults to the first
@@ -638,8 +744,13 @@ export interface CsrfConfig {
   cookieName?: string;
   /** Header name expected to mirror the cookie value. Default `'x-csrf-token'`. */
   headerName?: string;
-  /** Methods to enforce on. Default `['POST','PUT','PATCH','DELETE']`. */
-  protectedMethods?: readonly string[];
+  /**
+   * Methods to enforce on. Default `['POST','PUT','PATCH','DELETE']`.
+   * Constrained to a literal union so a typo (`'POSTT'`) is a compile-time
+   * error — the §9.5.1 invariant ("safe methods MUST stay safe") is now
+   * enforceable at the type level instead of a runtime warning.
+   */
+  protectedMethods?: readonly ('POST' | 'PUT' | 'PATCH' | 'DELETE')[];
   /**
    * Origin / Host check. When `true` (default), the manager additionally
    * verifies `Origin` (or `Referer`) matches the request `Host` for the same
@@ -693,7 +804,7 @@ export const SESSION_ERROR_CODES = [
   'CSRF_INVALID',           // double-submit token mismatch
   'CSRF_MISSING',           // protected method without token
   'STORE_UNAVAILABLE',      // adapter raised — wraps original error
-  'SECRET_TOO_SHORT',       // < 32 bytes after decoding
+  'SECRET_TOO_SHORT',       // < 256 bits of entropy in the supplied secret
   'CONFIG_INVALID',         // any other config validation failure
   'PAYLOAD_TOO_LARGE',      // cookie store: > 4 KB after seal
   'FINGERPRINT_MISMATCH',   // device hash diverged + onMismatch === 'destroy'
@@ -722,6 +833,13 @@ export function createCookieStore<T extends SessionData = SessionData>(opts?: {
 }): SessionStore<T>;
 
 // @authkit/sessions/adapters/memory
+//
+// **Test/dev only.** Never the default — `SessionConfig.store` is required,
+// the TypeScript compiler forces every consumer to pick a backing store
+// explicitly. Importing this adapter is the explicit signal "I know what
+// I am doing, this is a test or a single-process dev environment".
+// Removes the express-session footgun where a forgotten store config
+// silently leaks state in production.
 export function createMemoryStore<T extends SessionData = SessionData>(opts?: {
   /** Max records — LRU-evicted past this. Default 10_000. */
   maxRecords?: number;
@@ -782,15 +900,22 @@ export function createDurableObjectStore<T extends SessionData = SessionData>(
 
 ```ts
 // @authkit/sessions/frameworks/hono
-declare module 'hono' {
-  interface ContextVariableMap {
-    session: SessionRecord<unknown> | null;
-    sessions: SessionManager<unknown>;
-  }
-}
-export function honoSessions<T extends SessionData = SessionData>(
-  config: SessionConfig<T>,
-): import('hono').MiddlewareHandler;
+//
+// Manager-as-input: the user constructs the manager (which carries the
+// generic `T`) and hands it to the adapter. The adapter exposes the manager
+// on `c.var.sessions` with the user's `T` already baked in — no
+// `declare module 'hono' { … ContextVariableMap }` augmentation, no `.d.ts`
+// ritual, and no `unknown` to launder. CSRF is on by default; pass
+// `csrf: false` in the manager config to disable.
+//
+// The middleware also pre-reads the session and exposes it on
+// `c.var.session: SessionRecord<T> | null` — typed via the manager generic
+// through TypeScript inference, not module augmentation.
+export function honoSessions<T extends SessionData>(
+  manager: SessionManager<T>,
+): import('hono').MiddlewareHandler<{
+  Variables: { sessions: SessionManager<T>; session: SessionRecord<T> | null };
+}>;
 
 // @authkit/sessions/frameworks/next
 export function getServerSession<T extends SessionData = SessionData>(
@@ -807,10 +932,12 @@ export function createSessionMiddleware<T extends SessionData = SessionData>(
 ): (req: import('next/server').NextRequest) => Promise<import('next/server').NextResponse>;
 
 // @authkit/sessions/frameworks/sveltekit
-export function createSessionHandle<T extends SessionData = SessionData>(
-  config: SessionConfig<T>,
+// Same manager-as-input pattern. `event.locals.session` is typed via the
+// manager generic through inference; consumers do NOT need an
+// `app.d.ts` augmentation to get a non-`unknown` session.
+export function createSessionHandle<T extends SessionData>(
+  manager: SessionManager<T>,
 ): import('@sveltejs/kit').Handle;
-// → augments event.locals.session: SessionRecord<T> | null
 ```
 
 ### 2.10 Ideal DX example (Hono + Cloudflare KV)
@@ -819,6 +946,7 @@ export function createSessionHandle<T extends SessionData = SessionData>(
 import { Hono } from 'hono';
 import { createSessionManager } from '@authkit/sessions';
 import { createKVStore } from '@authkit/sessions/adapters/cloudflare-kv';
+import { concurrency } from '@authkit/sessions/concurrency';
 import { honoSessions } from '@authkit/sessions/frameworks/hono';
 
 type Session = { userId: string; role: 'admin' | 'user' };
@@ -829,27 +957,30 @@ interface Env {
   SESSION_SECRET: string;
 }
 
-const app = new Hono<{ Bindings: Env; Variables: { session: SessionRecord<Session> | null } }>();
+const app = new Hono<{ Bindings: Env }>();
 
-app.use('*', (c, next) =>
-  honoSessions<Session>({
+app.use('*', (c, next) => {
+  const manager = createSessionManager<Session>({
     secrets: [c.env.SESSION_SECRET],
     store: createKVStore<Session>(c.env.SESSION_KV, { userIndex: c.env.SESSION_USER_INDEX }),
+    getUserId: (data) => data.userId,
     expiration: { absoluteSeconds: 60 * 60 * 24 * 30, slidingSeconds: 60 * 60 * 24 * 7 },
-    concurrency: { max: 5, strategy: 'lru' },
-    csrf: { enforceOrigin: true },
-  })(c, next),
-);
+    concurrency: concurrency({ max: 5, strategy: 'lru' }),
+    // CSRF is on by default in the framework adapter — explicitly disable
+    // with `csrf: false` for an API-token-only service.
+  });
+  return honoSessions(manager)(c, next);
+});
 
 app.get('/me', (c) => {
-  const session = c.get('session');
+  const session = c.var.session;          // SessionRecord<Session> | null  — no augmentation needed
   if (!session) return c.json({ error: 'unauthorized' }, 401);
-  return c.json(session.data); // <- typed as Session
+  return c.json(session.data);            // typed as Session via the manager generic
 });
 
 app.post('/logout', async (c) => {
-  const { applyTo } = await c.var.sessions.destroy(c.req.raw);
-  return new Response(null, applyTo({ status: 204 }));
+  const { headers } = await c.var.sessions.signOut(c.req.raw);
+  return new Response(null, { status: 204, headers });
 });
 ```
 
@@ -886,10 +1017,6 @@ app.post('/logout', async (c) => {
        │                └──────────────┘
        │
        ├── core/expiration.ts  (sliding + absolute window)
-       ├── core/concurrency.ts (LRU/FIFO/deny-new — calls store.listByUser)
-       ├── core/csrf.ts        (double-submit issue + verify)
-       ├── core/fingerprint.ts (UA/IP HMAC, mismatch policy)
-       ├── core/audit.ts       (composeAuditHook, JSON formatter)
        └── core/id.ts          (256-bit random + base64url)
 ```
 
@@ -898,6 +1025,14 @@ own subpath exports and are pulled in **only** when the user imports them.
 Conversely, `core/*` never imports any adapter, so a consumer who imports
 the cookie store does not pull Redis, Postgres, or DO clients.
 
+The four feature modules — `features/csrf`, `features/fingerprint`,
+`features/concurrency`, `features/audit` — sit **outside** the core
+dependency graph. Each has its own subpath export
+(`@authkit/sessions/csrf` etc.); the core depends only on the
+`SessionFeature` contract from `core/feature.ts`, not on any concrete
+feature implementation. A build that never imports any feature subpath
+ships zero feature code.
+
 ### 3.2 Data flow — the request lifecycle
 
 ```
@@ -905,33 +1040,40 @@ Request ──► core/headers.parseCookie    ──┐
                                           ▼
                               core/cookie.parseEnvelope
                                           ▼
-                             crypto/hmac.verify (constant-time)
+                       ┌──────────────────┴──────────────────┐
+                       ▼                                     ▼
+        [stateful adapter — Redis/KV/PG/D1/DO]    [cookie-only adapter]
+        envelope = HKDF-id || HMAC(id)            envelope = AEAD(JSON(record))
+        crypto/hmac.verify(id) constant-time      crypto/aead.open(cookie)
+        store.read(id)                            record materialised inline
+                       │                                     │
+                       └──────────────────┬──────────────────┘
                                           ▼
-                             crypto/aead.open  (cookie-store path)
-                                       │
-                          ┌────────────┴───────────────┐
-                          ▼                            ▼
-              [stateful adapter]               [cookie-only adapter]
-              core/lifecycle.read              record materialised inline
-                          │                            │
-                          └────────────┬───────────────┘
-                                       ▼
                        core/expiration.evaluate(record, now)
-                                       ▼
-                          ┌────────────┴────────────┐
-                       ALIVE                      EXPIRED
-                          │                          │
-                          ▼                          ▼
-                core/fingerprint.check        emit 'session.read.failed'
-                          │                  return null
+                                          ▼
+                          ┌───────────────┴───────────────┐
+                       ALIVE                           EXPIRED
+                          │                               │
+                          ▼                               ▼
+              features/fingerprint.check        emit 'session.read.failed'
+                          │                       return null
                           ▼
-                   core/csrf.attach
+                  features/csrf.attach
                           ▼
                  SessionRecord<T>  ────► handler
 ```
 
+The cookie-store path uses **AEAD only** (AES-256-GCM): the GCM tag *is*
+the MAC, verified atomically inside `aead.open`. There is no separate
+HMAC layer — adding one would be redundant work and a second
+key-management surface for no extra security (see §9.1.3 for the threat
+model). The stateful path uses HMAC-SHA256 over the bare opaque session
+id, because the id is a cookie value the client sends back and we only
+care about authenticity, not confidentiality (the id by itself reveals
+nothing about the session content, which lives server-side).
+
 Mutating ops follow the same prefix, then branch into
-`core/lifecycle.{create|update|rotate|destroy}` which encodes a new record,
+`core/lifecycle.{create|update|rotate|signOut}` which encodes a new record,
 hands it to the store, and returns `SessionAttachment<T>` containing a
 fully-formed `Set-Cookie` header.
 
@@ -949,8 +1091,19 @@ fully-formed `Set-Cookie` header.
 - **Single time source** — every clock read goes through `core/time.ts`,
   swapped via `config.clock`. Eliminates flaky tests around clock skew.
 - **HKDF key separation** — the user gives one secret; we derive two
-  internal keys (`enc` + `sig`) so they are never reused across primitives,
-  per NIST SP 800-108.
+  internal keys (`enc` + `sig`) so they are never reused across
+  primitives, per NIST SP 800-108. `enc` is the AEAD key for the
+  cookie-store envelope (AES-256-GCM); `sig` is the HMAC-SHA256 key for
+  authenticating opaque session ids on stateful stores and for the
+  fingerprint device hash. The two `info` strings (`'sessions:enc:v1'`
+  and `'sessions:sig:v1'`) are versioned so a future protocol bump does
+  not invalidate existing rotations.
+- **AEAD over encrypt-then-MAC for the cookie envelope** — AES-256-GCM
+  provides confidentiality + authenticity in a single primitive; layering
+  HMAC over it would be redundant work and a second key surface. The
+  GCM tag is verified atomically inside `aead.open` before any plaintext
+  is exposed. Stateful stores use HMAC alone, because the cookie carries
+  only an opaque session id and there is nothing to encrypt.
 - **Zero `any`, no internal casts** — `as` is banned by Biome rule outside
   `core/encoder.ts` (envelope deserialisation) and `crypto/*` (Uint8Array
   view casts). Runtime validation of decoded payloads happens at the
@@ -986,51 +1139,66 @@ const sessions = createSessionManager<{ userId: string }>({ secrets: [SECRET] })
 
 ### 4.2 Conditional type for `SessionAttachment`
 
-`SessionAttachment<T>` carries `record: T | null`, but typing a destroy
+`SessionAttachment<T>` carries `record: T | null`, but typing a sign-out
 attachment as `SessionRecord<null>` is wrong (record is gone). The
 conditional type encodes the invariant:
 
 ```ts
 export interface SessionAttachment<T extends SessionData | null> {
   readonly record: T extends null ? null : SessionRecord<NonNullable<T>>;
-  readonly setCookie: string;
-  readonly applyTo: (init?: ResponseInit) => ResponseInit;
+  readonly cookie: string;
+  readonly headers: Headers;
+  readonly attachTo: (headers: Headers) => Headers;
 }
 ```
 
-Consumers calling `destroy()` get `record: null` automatically; consumers
+Consumers calling `signOut()` get `record: null` automatically; consumers
 calling `create() / update() / rotate()` get `record: SessionRecord<T>`.
 
-### 4.3 Framework augmentation
+### 4.3 Framework typing — manager-as-input, no augmentation
 
-Hono / Express / Fastify / SvelteKit all support module augmentation. The
-adapters use it to add typed `c.get('session')`, `req.session`,
-`event.locals.session` — **typed via `T`**, not `any`:
-
-```ts
-// in @authkit/sessions/frameworks/hono/index.ts
-declare module 'hono' {
-  interface ContextVariableMap {
-    session: SessionRecord<unknown> | null;
-    sessions: SessionManager<unknown>;
-  }
-}
-```
-
-The `unknown` is intentional — consumers re-augment with their own `T` in a
-single `.d.ts` file (documented in README), the recommended Hono pattern.
-
-### 4.4 Branded ids
-
-`SessionId` and `CsrfToken` are branded primitives:
+Every framework adapter takes a fully-constructed `SessionManager<T>` as
+input and returns a typed middleware whose context carries `T` through
+inference. Concretely:
 
 ```ts
-export type SessionId = string & { readonly __brand: 'SessionId' };
-export type CsrfToken = string & { readonly __brand: 'CsrfToken' };
+const manager = createSessionManager<Session>({ ... });
+// manager: SessionManager<Session>
+
+app.use('*', honoSessions(manager));
+// In handlers:
+//   c.var.sessions: SessionManager<Session>
+//   c.var.session:  SessionRecord<Session> | null
 ```
 
-Prevents accidentally passing a user id where a session id is expected,
-without any runtime cost (the brand is a phantom property).
+The user writes **zero `.d.ts`** — no `declare module 'hono' { … }`, no
+re-augmentation of `ContextVariableMap`, no `unknown` to launder. Every
+framework adapter (Hono, Express, Fastify, SvelteKit, Elysia, h3,
+Next.js, Remix) follows this pattern; the adapter signature is
+
+```ts
+adapter<T extends SessionData>(manager: SessionManager<T>): /* framework middleware */
+```
+
+so `T` flows from `createSessionManager` → adapter → context. This is
+the iron-session/Lucia papercut a Lucia-replacement should beat, not
+preserve.
+
+### 4.4 Internal-only branded ids
+
+We keep `SessionId` and `CsrfToken` brands **inside the engine** (in
+`src/types/session.ts`, never exported) so `core/lifecycle.ts` cannot
+accidentally pass a user id where a session id is expected. They are
+**not** on the public surface — exposing them would force consumers
+calling `revokeBySessionId(req.params.id)` to either cast (`as SessionId`,
+which we ban with a Biome rule) or call a runtime validator we'd then
+have to ship.
+
+The public `revokeBySessionId(id: string): Promise<boolean>` takes a plain
+`string`. The internal brand is applied via `core/encoder.ts` — the only
+file the codebase trusts to mint a `SessionId` from a parsed envelope.
+That preserves the safety property we wanted (no id-mixup in engine code)
+without the public-API friction.
 
 ### 4.5 `Result<T, E>` for non-throwing reads
 
@@ -1073,7 +1241,7 @@ common operations — `null` is the right return shape for "no session".
 | `manager.update(req, fn)`         | no active session             | throw `NOT_FOUND` |
 | `manager.update(req, fn)`         | record changed under us       | retry once, then throw `CONFLICT` |
 | `manager.rotate(req)`             | no active session             | throw `NOT_FOUND` |
-| `manager.destroy(req)`            | nothing to destroy            | resolve — idempotent |
+| `manager.signOut(req)`            | nothing to end                | resolve — idempotent |
 | `manager.verifyCsrf(req, token)`  | any mismatch                  | resolve `false` + audit `csrf.failed` |
 | `createSessionManager(config)`    | invalid secrets               | throw at construction `SECRET_TOO_SHORT` |
 | `createSessionManager(config)`    | invalid policy                | throw at construction `CONFIG_INVALID` |
@@ -1122,33 +1290,49 @@ library themselves.
 
 ### 6.1 Entry points
 
-The package ships **20+ subpath exports**, every one a leaf module that the
+The package ships **24+ subpath exports**, every one a leaf module that the
 bundler can tree-shake on its own. The user pays only for what they import.
 
-| Subpath                                  | Bundle target | Notes                                     |
-|------------------------------------------|--------------|--------------------------------------------|
-| `@authkit/sessions`                      | **6 KB**     | core engine — manager + cookie + crypto    |
-| `@authkit/sessions/errors`               | **0.4 KB**   | `SessionError` + codes                     |
-| `@authkit/sessions/crypto`               | **2.0 KB**   | re-exports `aead`, `hmac`, `kdf` for power users |
-| `@authkit/sessions/adapters/memory`      | **0.5 KB**   | dev-only LRU in-memory store               |
-| `@authkit/sessions/adapters/cookie`      | **0.8 KB**   | adds the cookie-store wrapper              |
-| `@authkit/sessions/adapters/redis`       | **1.2 KB**   | + Lua snippet inlined as string            |
-| `@authkit/sessions/adapters/upstash`     | **1.0 KB**   | uses `@upstash/redis` peer client           |
-| `@authkit/sessions/adapters/cloudflare-kv` | **0.9 KB** | KV + companion userIndex                   |
-| `@authkit/sessions/adapters/cloudflare-d1` | **1.1 KB** | D1 + prepared statements                   |
-| `@authkit/sessions/adapters/postgres`    | **1.3 KB**   | works with pg / postgres / neon            |
-| `@authkit/sessions/adapters/durable-object` | **0.7 KB** | reference DO impl                         |
-| `@authkit/sessions/frameworks/hono`      | **0.6 KB**   |                                            |
-| `@authkit/sessions/frameworks/elysia`    | **0.6 KB**   |                                            |
-| `@authkit/sessions/frameworks/next`      | **1.0 KB**   | App Router + middleware split exports      |
-| `@authkit/sessions/frameworks/remix`     | **0.7 KB**   | createSessionStorage shape                 |
-| `@authkit/sessions/frameworks/sveltekit` | **0.7 KB**   | handle wrapper                             |
-| `@authkit/sessions/frameworks/express`   | **0.8 KB**   | (req,res,next) compat layer                |
-| `@authkit/sessions/frameworks/fastify`   | **0.7 KB**   | fastify-plugin                             |
-| `@authkit/sessions/frameworks/h3`        | **0.6 KB**   | h3 / Nitro                                 |
+Budgets below count **library code only** (size-limit measured on
+`dist/**/*.js` per entry, gzip). The runtime deps `@noble/ciphers`
+(~3 KB) + `@noble/hashes` (~3 KB) are pulled by every cookie/crypto path
+and add ~6 KB on top — counted once, not per entry. Realistic
+browser-app build (core + cookie + redis + csrf + concurrency) is
+**~8 KB of library code** + ~6 KB `@noble/*` = **~14 KB total**, which we
+quote honestly in the README.
+
+| Subpath                                  | Library budget | Notes                                     |
+|------------------------------------------|---------------|--------------------------------------------|
+| `@authkit/sessions`                      | **5 KB**      | core engine — manager + lifecycle + cookie + headers + expiration + encoder + id + time + crypto/aead + crypto/kdf + crypto/random. Zero feature code. |
+| `@authkit/sessions/errors`               | **0.4 KB**    | `SessionError` + codes                     |
+| `@authkit/sessions/crypto`               | **2.0 KB**    | re-exports `aead`, `hmac`, `kdf` for power users |
+| `@authkit/sessions/csrf`                 | **0.6 KB**    | feature — double-submit + Origin check     |
+| `@authkit/sessions/fingerprint`          | **0.7 KB**    | feature — UA/Accept-Language/sec-ch-ua/IP HMAC |
+| `@authkit/sessions/concurrency`          | **0.5 KB**    | feature — LRU/FIFO/deny-new policy         |
+| `@authkit/sessions/audit`                | **0.3 KB**    | feature — composeAuditHook + JSON formatter |
+| `@authkit/sessions/adapters/memory`      | **0.5 KB**    | test/dev-only LRU in-memory store          |
+| `@authkit/sessions/adapters/cookie`      | **0.8 KB**    | adds the cookie-store wrapper              |
+| `@authkit/sessions/adapters/redis`       | **1.2 KB**    | + Lua snippet inlined as string            |
+| `@authkit/sessions/adapters/upstash`     | **1.0 KB**    | uses `@upstash/redis` peer client          |
+| `@authkit/sessions/adapters/cloudflare-kv` | **0.9 KB**  | KV + companion userIndex                   |
+| `@authkit/sessions/adapters/cloudflare-d1` | **1.1 KB**  | D1 + prepared statements                   |
+| `@authkit/sessions/adapters/postgres`    | **1.3 KB**    | works with pg / postgres / neon            |
+| `@authkit/sessions/adapters/durable-object` | **0.7 KB** | reference DO impl                          |
+| `@authkit/sessions/frameworks/hono`      | **0.8 KB**    | imports `csrf` for default-on              |
+| `@authkit/sessions/frameworks/elysia`    | **0.8 KB**    | imports `csrf` for default-on              |
+| `@authkit/sessions/frameworks/next`      | **1.2 KB**    | App Router + middleware split exports + csrf default |
+| `@authkit/sessions/frameworks/remix`     | **0.9 KB**    | createSessionStorage shape + csrf default  |
+| `@authkit/sessions/frameworks/sveltekit` | **0.9 KB**    | handle wrapper + csrf default              |
+| `@authkit/sessions/frameworks/express`   | **1.0 KB**    | (req,res,next) compat layer + csrf default |
+| `@authkit/sessions/frameworks/fastify`   | **0.9 KB**    | fastify-plugin + csrf default              |
+| `@authkit/sessions/frameworks/h3`        | **0.8 KB**    | h3 / Nitro + csrf default                  |
 
 Budgets are enforced in CI via `size-limit` (see `.size-limit.json`). A PR
-that breaks the budget fails the check.
+that breaks the budget fails the check. The 5 KB core is achievable
+because no feature code is reachable from `src/index.ts` — every
+`features/*` module is its own subpath and is only pulled in when the
+user explicitly imports it. The framework adapter budgets account for
+the bundled CSRF feature (the secure-by-default it ships).
 
 ### 6.2 Tree-shaking enablers
 
@@ -1157,10 +1341,14 @@ that breaks the budget fails the check.
 - **No barrel re-exports** in `src/core/*` → only at package boundaries
   (`src/index.ts`, `src/errors/index.ts`, `src/crypto/index.ts`) which are
   themselves tiny.
-- **Per-feature opt-in** — `concurrency`, `fingerprint`, `csrf`, `audit`
-  are all unused when the consumer doesn't pass the corresponding config
-  field. Each feature module's exports are referenced only inside
-  conditional branches that are minified away when the option is `undefined`.
+- **Per-feature subpath opt-in** — `concurrency`, `fingerprint`, `csrf`,
+  `audit` each live behind their own subpath export. The core (`src/index.ts`)
+  has **zero** static imports of any feature module, so a consumer who
+  never imports `@authkit/sessions/csrf` ships zero CSRF code. The
+  `SessionConfig` slot for each feature accepts an opaque `SessionFeature`
+  object that the user constructs by calling the imported factory; the
+  manager invokes lifecycle hooks on whichever features are present, no
+  `if (config.csrf)` branches reaching into static feature code.
 - **No defensive `try/catch` around imports** — every conditional import
   is dynamic when truly optional (e.g. the express adapter dynamically
   imports `node:querystring` only when called from Express ≤4).
@@ -1192,8 +1380,8 @@ Build invariants enforced in CI:
 
 | Package           | Why                                                    | Approx size | Audit status      |
 |-------------------|---------------------------------------------------------|-------------|-------------------|
-| `@noble/ciphers`  | AES-256-GCM (cookie sealing)                           | ~3 KB       | Audited (Cure53, Trail of Bits) |
-| `@noble/hashes`   | HMAC-SHA256 (signing) + HKDF + SHA-256 (device hash)   | ~3 KB       | Same vendor, same audits         |
+| `@noble/ciphers`  | AES-256-GCM (cookie envelope AEAD — provides confidentiality + authenticity in one primitive; no separate MAC layer) | ~3 KB | Audited (Cure53, Trail of Bits) |
+| `@noble/hashes`   | HKDF-SHA256 (key derivation) + HMAC-SHA256 (opaque session-id signature for stateful stores, fingerprint device hash) | ~3 KB | Same vendor, same audits |
 
 These are the same primitives backing `@oslojs/*` and the `arctic` OAuth
 library — best-in-class TypeScript crypto with no native bindings, so they
@@ -1256,8 +1444,12 @@ Highlights:
 - `"sideEffects": false`.
 - `"exports"` maps every subpath listed in §6.1 to its `dist/**/index.js`
   with the matching `types` condition first (NodeNext requires it).
-- `"engines": { "node": ">=20" }` — Node 18 is EoL April 2025, Node 20 is
-  the current LTS in 2026.
+- `"engines": { "node": ">=20" }` — Node 18 reached EoL in April 2025,
+  Node 20 is the current LTS in 2026. The original research report
+  (`reports/05-session-vault.json`) lists "Node.js 18+" as a runtime
+  target; we deliberately diverge from that snapshot here. The PLAN,
+  `package.json`, and the README all align on Node 20+; the report is a
+  point-in-time research artifact and is not updated retroactively.
 - `"keywords"` matches the SEO list from `reports/05-session-vault.json`.
 - `"scripts"` parallels the sibling `@authkit/permissions` library (build,
   test, test:types, lint, format, size, publint, attw, release).
@@ -1345,9 +1537,17 @@ The implementation MUST handle the following — each has a dedicated test in
    `INVALID_COOKIE` audit (it's a normal anonymous request).
 2. **Cookie present but malformed envelope.** Returns `null`,
    audits `session.read.failed` with `INVALID_COOKIE`.
-3. **Cookie present, envelope OK, signature fails.** Returns `null`,
-   audits with `INVALID_SIGNATURE`. NEVER decrypts before HMAC verify
-   (encrypt-then-MAC).
+3. **Cookie present, envelope OK, authentication fails.** Returns `null`,
+   audits with `INVALID_SIGNATURE`. The cookie-store envelope is **AES-256-GCM
+   AEAD**: the GCM tag *is* the authentication, verified atomically inside
+   `aead.open` before any plaintext is exposed (the construction is
+   IND-CCA2-secure). There is no outer HMAC layer — adding one over an
+   AEAD ciphertext would be redundant work, a second key-management
+   surface, and zero extra security against the modern attacker model.
+   For stateful stores the cookie carries only the opaque session id, and
+   we sign that id with HMAC-SHA256 (encrypt-then-MAC is moot since there
+   is nothing to encrypt). HKDF separates the AEAD key from the HMAC key
+   (different `info` strings) so the two key schedules can never collide.
 4. **Multiple `Cookie` headers** (legacy proxies). Parser concatenates.
 5. **Multiple cookies with the same name** (browser-side weirdness when
    `Domain=` and host-only coexist). Pick the first that verifies; ignore
@@ -1359,9 +1559,9 @@ The implementation MUST handle the following — each has a dedicated test in
    throws `CONFIG_INVALID` if the user opts into a conflicting attribute.
 8. **`SameSite=None` without `Secure`.** Throws `CONFIG_INVALID` —
    browsers ignore the cookie otherwise; failing fast is the correct DX.
-9. **Existing `Set-Cookie` headers** in the response. `applyTo()` appends
-   without clobbering — a single `Headers` object can hold both the
-   session cookie and a CSRF mirror.
+9. **Existing `Set-Cookie` headers** in the response. `attachTo(headers)`
+   appends without clobbering — a single `Headers` object can hold both
+   the session cookie and a CSRF mirror.
 
 ### 9.2 Crypto / signature edge cases
 
@@ -1399,9 +1599,12 @@ The implementation MUST handle the following — each has a dedicated test in
 
 ### 9.4 Fingerprint / device edge cases
 
-1. **Mobile carrier IP roams.** The default fingerprint config does NOT
-   include IP; the user must opt in. When opted in, `onMismatch:
-   'rotate'` is the recommended setting, not `'destroy'`.
+1. **Mobile carrier IP roams.** The default fingerprint includes
+   `['user-agent', 'accept-language', 'sec-ch-ua']` — enough entropy to
+   distinguish browser/platform combinations without churning on
+   carrier IP changes. Adding `'ip'` is opt-in for high-security
+   deployments; pair it with `onMismatch: 'rotate'`, not `'destroy'`,
+   to avoid kicking legitimate users on carrier roams.
 2. **Bot User-Agent ranges.** Fingerprint is a hash, never a parser —
    we don't try to interpret UA. Mismatch is mismatch, full stop.
 3. **`X-Forwarded-For` spoofing.** Default extractor takes the **first**
@@ -1422,7 +1625,7 @@ The implementation MUST handle the following — each has a dedicated test in
    `'no-session'` — the absence of a session implies no protected action.
 4. **Cookie-store + CSRF.** When the session is stateless (cookie store),
    the CSRF token is derived from `meta.csrf` carried inside the
-   encrypted envelope, so revoking is implicit on `destroy()`.
+   encrypted envelope, so revoking is implicit on `signOut()`.
 
 ### 9.6 Storage adapter edge cases
 
@@ -1430,21 +1633,36 @@ The implementation MUST handle the following — each has a dedicated test in
    `ECONNRESET` in `STORE_UNAVAILABLE`; the manager surfaces it; the
    handler decides whether to retry. We do NOT auto-retry — that's
    middleware's job, not the library's.
-2. **Cloudflare KV eventual consistency.** Reads after a `destroy()` may
-   return the deleted record for up to 60 s globally. Documented
-   prominently in the KV adapter README; the manager additionally checks
-   `meta.expiresAt < now()` against a per-record tombstone marker
-   (`destroyedAt`) we set in `destroy()` — providing immediate revoke at
-   the cost of one extra small write that lives `expiresAt`-long.
+2. **Cloudflare KV eventual consistency.** Reads after a `delete()` may
+   return the deleted record for up to **60 s globally** (KV's documented
+   max staleness window). The KV adapter writes a per-record
+   `destroyedAt` tombstone alongside the delete, which the manager honours
+   on read — but the tombstone itself lives in KV and is subject to the
+   same eventual consistency, so a stale read in the same region within
+   the window can still return the record without seeing the tombstone.
+   We therefore **claim "best-effort instant revoke + bounded staleness
+   ≤60 s globally"**, not "immediate revoke", and document this trade-off
+   prominently in the KV adapter README.
+
+   For deployments that need genuine instant revoke on Cloudflare (e.g.
+   security-sensitive admin panels, high-value B2B SaaS) the recommended
+   pattern is the **Durable Object adapter** — DO is strongly consistent
+   within a single object, so a `delete()` is observed by every subsequent
+   read immediately. The DO adapter README cross-links to the KV adapter
+   and recommends a **KV+DO hybrid**: KV for hot-path session reads (cheap
+   global cache) with a DO consulted on every privileged action to
+   re-confirm the session is still alive.
 3. **Postgres connection pool exhaustion.** Adapter does not own the
    pool; thrown errors propagate through `STORE_UNAVAILABLE`.
 4. **D1 row size limit (1 MB).** Encoded record > 950 KB throws
    `PAYLOAD_TOO_LARGE` before write. (Practical sessions never approach
    this, but a typo `data: { x: hugeBlob }` should fail loudly.)
-5. **Memory store in a serverless cold start.** The default warning emits
-   exactly once per process via a module-scope `Symbol.for('authkit:memory:warned')`.
-   Consumers explicitly disable with `createMemoryStore({ silent: true })`
-   when intentional (tests).
+5. **Memory store is opt-in only.** `SessionConfig.store` is required; the
+   memory adapter must be imported explicitly. There is no NODE_ENV-based
+   warning probe (it lies on Workers and Deno) — picking the wrong store
+   is now a TypeScript error, not a runtime guess. Tests construct the
+   store directly; production bundles never reach the memory adapter
+   subpath.
 
 ### 9.7 Cookie-store specific edge cases
 
@@ -1454,7 +1672,7 @@ The implementation MUST handle the following — each has a dedicated test in
    index). The adapter returns `[]` and emits a one-shot warning when
    `concurrency` is configured against it. Consumers using cookie store
    for multi-device features should use a different adapter.
-3. **`destroy()` semantics.** The cookie envelope is local; `destroy()`
+3. **`signOut()` semantics.** The cookie envelope is local; `signOut()`
    emits an expiring `Set-Cookie` to clear the browser copy. Server-side
    "log out everywhere" is impossible with a stateless adapter, by design.
 
@@ -1517,3 +1735,254 @@ namespace or a problem we deliberately don't take on.
 - **GUI for "Active devices".** We provide `listByUser()`; the rendering
   is yours. A reference React component will live in `examples/`, not in
   the library.
+
+---
+
+## Review Changes
+
+Response to architecture review by Mykhailo Kryvytskyi (`REQUEST_CHANGES`).
+For each reviewer point: original concern → resolution → sections touched.
+
+### 1. CSRF off by default — **agreed, changed**
+
+**Original concern:** `csrf?: CsrfConfig` was opt-in; the report's
+positioning is "встроенный CSRF (double-submit cookie)" and off-by-default
+CSRF on a browser-targeted lib is exactly the iron-session footgun we are
+supposed to fix.
+
+**Change:** Framework adapters (`/frameworks/hono`, `/next`, `/express`,
+`/sveltekit`, `/remix`, `/elysia`, `/fastify`, `/h3`) now import
+`@authkit/sessions/csrf` and enable it by default with `Lax` cookies +
+Origin enforcement. Pure API services pass `csrf: false` to opt out.
+Raw `createSessionManager` users opt in by importing the `csrf` subpath
+and assigning to `config.csrf`; the README has a security warning that
+browser-bound sessions without CSRF are unsafe. The split (default-on
+in adapters, explicit opt-in for raw manager) is the only way to keep
+the core engine free of static CSRF code while still shipping a
+secure-by-default integration for 95 % of users.
+
+**Sections modified:** §2.5 (`csrf` slot type + comment),
+§2.10 (Hono+KV example shows default-on), updated framework adapter
+budgets in §6.1 and `package.json#size-limit` to reflect the bundled
+CSRF feature.
+
+### 2. MemoryStore default with runtime warning — **agreed, changed**
+
+**Original concern:** Defaulting to a MemoryStore replicates the
+express-session "leaky default" footgun; the `process.env.NODE_ENV`
+warning probe is unreliable on Workers/Deno.
+
+**Change:** `SessionConfig.store` is now **required** (no `?`). The
+TypeScript compiler forces every consumer to choose a backing store
+explicitly. `createMemoryStore` is documented as test/dev-only and must
+be imported from `@authkit/sessions/adapters/memory`; there is no
+NODE_ENV warning anywhere in the codebase. The §9.6.5 edge case was
+rewritten to reflect that picking the wrong store is now a TypeScript
+error, not a runtime probe.
+
+**Sections modified:** §1 (memory adapter comment), §2.5 (`store: SessionStore<T>`
+required), §2.8 (memory adapter constructor doc), §9.6.5.
+
+### 3. `userId` duplication in `create()` — **agreed, changed**
+
+**Original concern:** Passing `userId` both inside `data` and inside
+`opts` invites desync; `concurrency` / `revokeByUser` would silently key
+off the wrong source.
+
+**Change:** Added `getUserId?: (data: T) => string | undefined` to
+`SessionConfig`. It runs once on `create()` and after every `update()`
+mutator; the result is the single source of truth for `meta.userId`.
+The `opts.userId` parameter on `manager.create(req, data, opts)` is
+removed; `opts` now carries only `device?: Partial<Device>`.
+
+**Sections modified:** §2.1 (root-entrypoint example uses `getUserId`),
+§2.4 (manager surface — `create` signature), §2.5 (`getUserId` slot
+documented), §2.10 (Hono+KV example).
+
+### 4. 6 KB core budget is wishful — **agreed, changed (option b)**
+
+**Original concern:** `@noble/ciphers` + `@noble/hashes` already
+consume the entire 6 KB budget before a single line of `core/*` is
+bundled.
+
+**Change:** Took option (b) from the review — moved `csrf`,
+`fingerprint`, `concurrency`, `audit` to **subpath-only opt-ins** at
+`@authkit/sessions/{csrf,fingerprint,concurrency,audit}`. The core
+(`src/index.ts`) statically imports zero feature code. Updated the
+budget table to **5 KB for core (library code only)** and quoted the
+honest combined number — **~14 KB total** including `@noble/*` for a
+realistic browser app — in the `package.json#description` and the
+PLAN intro. Framework-adapter budgets bumped to account for the
+bundled CSRF default they now ship.
+
+**Sections modified:** Header/intro, §1 (new `features/` directory),
+§2.1 (subpath import notes), §6.1 (full budget rewrite + honesty
+paragraph), §6.2 ("per-feature subpath opt-in"), `package.json`
+(new `./csrf`, `./fingerprint`, `./concurrency`, `./audit` exports +
+matching size-limit budgets, framework adapters bumped, description
+rewritten).
+
+### 5. Encrypt-then-MAC claim muddled — **agreed, changed**
+
+**Original concern:** AES-256-GCM is already AEAD; an outer HMAC over
+it is redundant work and a second key-management surface, and the
+existing wording reads like belt-and-suspenders.
+
+**Change:** Cookie-store envelope is now **AEAD-only** (AES-256-GCM —
+the GCM tag *is* the authentication, verified atomically inside
+`aead.open`). Stateful stores still use HMAC-SHA256 — but only over
+the bare opaque session id, because the id is the only thing the
+client sends back and we only care about authenticity of that
+identifier. `@noble/hashes` is still required for HKDF-SHA256 (key
+derivation), HMAC-SHA256 (stateful-store id signature), and the
+fingerprint device hash. Rewrote §9.1.3 to make the construction
+auditable and added a new bullet to §3.3 explaining the choice.
+
+**Sections modified:** §3.2 (data flow diagram), §3.3 (new "AEAD over
+encrypt-then-MAC" pattern bullet), §7.1 (dep table reasons), §9.1.3.
+
+### 6. KV "instant revoke" via tombstone hand-wavy — **agreed, changed**
+
+**Original concern:** The tombstone itself is in KV and subject to the
+same eventual consistency, so a stale read in the same region within
+the 60 s window can still return the (still-stale) record without
+seeing the tombstone — "immediate revoke" is overclaim.
+
+**Change:** §9.6.2 reworded to claim **"best-effort instant revoke
++ bounded staleness ≤60 s globally"**, never "immediate revoke". The
+KV adapter README will document this trade-off prominently.
+Cross-linked the **Durable Object adapter** as the answer for genuine
+instant revoke on Cloudflare, and recommended a **KV+DO hybrid**
+(KV for hot-path reads, DO consulted on every privileged action) for
+security-sensitive deployments.
+
+**Sections modified:** §9.6.2.
+
+### 7. Framework typed context still requires augmentation — **agreed, changed**
+
+**Original concern:** `declare module 'hono' { ContextVariableMap }`
+with `unknown` forces every consumer to write a `.d.ts` augmentation —
+the iron-session/Lucia papercut a Lucia-replacement should beat.
+
+**Change:** Switched every framework adapter to the **manager-as-input**
+pattern: the user constructs `createSessionManager<T>(...)`, hands it
+to `honoSessions(manager)` / `createSessionHandle(manager)` etc., and
+the adapter returns a typed middleware whose context carries `T`
+through TypeScript inference. Zero module augmentation. Zero `unknown`.
+Zero `.d.ts` ritual. §4.3 rewritten end-to-end; §2.9 dropped the
+`declare module 'hono'` block; §2.10 example updated.
+
+**Sections modified:** §2.9, §2.10, §4.3.
+
+### 8. Naming inconsistency `destroyByUser` vs `revokeByUser` — **agreed, changed**
+
+**Original concern:** Store says `destroy*`, manager says `revoke*`,
+and `manager.destroy(req)` is semantically `logout`/`signOut`.
+
+**Change:** Adopted the reviewer's verb split — **manager revokes,
+store deletes**. `SessionStore` now has `delete(id)` and
+`deleteByUser(userId)`. `SessionManager` keeps `revokeBySessionId(id)`,
+`revokeByUser(userId)`, and renames `destroy(req)` to **`signOut(req)`**.
+Audit event reason `'logout'` is unchanged. Updated the §5.1 error
+table and §9.7.3 / §9.5.4 references.
+
+**Sections modified:** §2.3 (store contract), §2.4 (manager surface),
+§5.1 (error table), §9.5.4, §9.7.3.
+
+### 9. `protectedMethods` should be a literal union — **agreed, changed**
+
+**Original concern:** `readonly string[]` lets a typo (`'POSTT'`)
+compile; the §9.5.1 invariant should be enforced at the type level.
+
+**Change:** Tightened to
+`readonly ('POST' | 'PUT' | 'PATCH' | 'DELETE')[]`. Documented the
+reasoning inline.
+
+**Sections modified:** §2.5 `CsrfConfig`.
+
+### 10. Default fingerprint without IP is near-useless — **agreed, changed**
+
+**Original concern:** Without IP the fingerprint is a UA HMAC and
+collapses every Chrome user into one bucket.
+
+**Change:** Default `include` is now
+`['user-agent', 'accept-language', 'sec-ch-ua']` — enough entropy to
+distinguish browser/platform combinations without churning on mobile
+carrier IP changes. `'ip'` remains opt-in for high-security
+deployments and pairs with `onMismatch: 'rotate'` (default). Updated
+§9.4.1 to reflect the new defaults.
+
+**Sections modified:** §2.5 `FingerprintConfig`, §9.4.1.
+
+### 11. `applyTo` is an unusual idiom — **agreed, changed**
+
+**Original concern:** Web-standard handlers compose responses via
+`new Headers()` + `new Response(body, { headers })`; `applyTo` adds
+another concept to learn.
+
+**Change:** `SessionAttachment` now exposes
+**`headers: Headers`** (a fresh `Headers` with the `Set-Cookie`
+appended — pass directly to `new Response`), **`cookie: string`** (raw
+Set-Cookie value for framework-typed cookie stores), and
+**`attachTo(headers)`** as the merge helper. `applyTo()` is gone.
+The §2.10 example shows `headers` as the primary path.
+
+**Sections modified:** §2.4 (`SessionAttachment` definition), §2.10
+(Hono example), §4.2 (conditional type), §9.1.9 (existing-headers note).
+
+### 12. Engine claim diverges across files — **agreed, changed**
+
+**Original concern:** Report says "Node.js 18+", `package.json`
+says `"node": ">=20"`, PLAN said "Node 18 is EoL April 2025".
+
+**Change:** Aligned **PLAN + `package.json` on Node 20+** (the
+report is a point-in-time research artifact, not retroactively
+updated). Added an explicit note to §8.1 that the report's
+"Node.js 18+" target was the original research baseline and that we
+deliberately diverge to Node 20+ given Node 18 is now over a year past
+EoL. `package.json` was already on `>=20`; this change is documentation
+only.
+
+**Sections modified:** §8.1, header.
+
+### 13. `SECRET_TOO_SHORT` boundary muddles entropy and AES-256 — **agreed, changed**
+
+**Original concern:** HKDF-Extract works on any length input; the
+32-byte rule exists because we want ≥256 bits of entropy, not because
+of an HKDF requirement.
+
+**Change:** Comment on `SessionConfig.secrets` rewritten to lead with
+the entropy requirement (≥256 bits), explaining HKDF works on any
+length and the floor exists for security, not for HKDF. The
+`SESSION_ERROR_CODES` comment for `SECRET_TOO_SHORT` matches.
+Implementation note: the runtime error message will name the entropy
+threshold ("`SECRET_TOO_SHORT`: secrets must carry ≥256 bits of
+entropy; got N bytes after decoding"), not just the byte count.
+
+**Sections modified:** §2.5 `secrets` comment, §2.7 error code
+comment.
+
+### 14. Branded `SessionId` has no public constructor — **agreed, changed**
+
+**Original concern:** `SessionId = string & { __brand }` combined
+with the Biome `as`-cast ban means consumers calling
+`revokeBySessionId(req.params.id)` cannot legally cast `string → SessionId`
+without either a runtime validator we'd have to ship or a cast we'd
+have to allow.
+
+**Change:** Dropped the **public** branded `SessionId` /
+`CsrfToken` types. The brands are kept **internal** (in
+`src/types/session.ts`, never exported) so `core/lifecycle.ts` and
+`core/encoder.ts` can still benefit from compile-time id-mixup
+prevention; the public `revokeBySessionId(id: string)` and
+`getCsrfToken(req)` etc. take/return plain `string`. §4.4 rewritten
+to explain the internal-only positioning.
+
+**Sections modified:** §4.4.
+
+### Out-of-scope / no change
+
+- The reviewer's "what's good" list is acknowledged with thanks; no
+  changes required.
+- **Inline comments**: there were no inline comments to act on
+  (`=== INLINE COMMENTS ===` section was empty).

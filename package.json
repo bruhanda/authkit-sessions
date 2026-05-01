@@ -1,7 +1,7 @@
 {
   "name": "@authkit/sessions",
   "version": "0.1.0",
-  "description": "Universal, TypeScript-first, edge-runtime-native session layer with pluggable storage adapters. <6KB gzipped, runs in Node, Bun, Deno, Cloudflare Workers and Vercel Edge. Lucia-deprecation alternative with instant revoke, concurrent session limits and device tracking.",
+  "description": "Universal, TypeScript-first, edge-runtime-native session layer with pluggable storage adapters. ~5KB core + opt-in feature subpaths (csrf, fingerprint, concurrency, audit), runs in Node 20+, Bun, Deno, Cloudflare Workers and Vercel Edge. Lucia-deprecation alternative with instant revoke, concurrent session limits and device tracking.",
   "license": "MIT",
   "author": "Vasyl Bruhanda",
   "homepage": "https://github.com/bruhanda/authkit-sessions#readme",
@@ -31,6 +31,22 @@
     "./crypto": {
       "types": "./dist/crypto/index.d.ts",
       "import": "./dist/crypto/index.js"
+    },
+    "./csrf": {
+      "types": "./dist/features/csrf/index.d.ts",
+      "import": "./dist/features/csrf/index.js"
+    },
+    "./fingerprint": {
+      "types": "./dist/features/fingerprint/index.d.ts",
+      "import": "./dist/features/fingerprint/index.js"
+    },
+    "./concurrency": {
+      "types": "./dist/features/concurrency/index.d.ts",
+      "import": "./dist/features/concurrency/index.js"
+    },
+    "./audit": {
+      "types": "./dist/features/audit/index.d.ts",
+      "import": "./dist/features/audit/index.js"
     },
     "./adapters/memory": {
       "types": "./dist/adapters/memory/index.d.ts",
@@ -230,7 +246,7 @@
     {
       "name": "core",
       "path": "dist/index.js",
-      "limit": "6 KB"
+      "limit": "5 KB"
     },
     {
       "name": "errors",
@@ -241,6 +257,26 @@
       "name": "crypto",
       "path": "dist/crypto/index.js",
       "limit": "2 KB"
+    },
+    {
+      "name": "csrf",
+      "path": "dist/features/csrf/index.js",
+      "limit": "0.6 KB"
+    },
+    {
+      "name": "fingerprint",
+      "path": "dist/features/fingerprint/index.js",
+      "limit": "0.7 KB"
+    },
+    {
+      "name": "concurrency",
+      "path": "dist/features/concurrency/index.js",
+      "limit": "0.5 KB"
+    },
+    {
+      "name": "audit",
+      "path": "dist/features/audit/index.js",
+      "limit": "0.3 KB"
     },
     {
       "name": "adapters/memory",
@@ -285,42 +321,42 @@
     {
       "name": "frameworks/hono",
       "path": "dist/frameworks/hono/index.js",
-      "limit": "0.6 KB"
+      "limit": "0.8 KB"
     },
     {
       "name": "frameworks/elysia",
       "path": "dist/frameworks/elysia/index.js",
-      "limit": "0.6 KB"
+      "limit": "0.8 KB"
     },
     {
       "name": "frameworks/next",
       "path": "dist/frameworks/next/index.js",
-      "limit": "1 KB"
+      "limit": "1.2 KB"
     },
     {
       "name": "frameworks/remix",
       "path": "dist/frameworks/remix/index.js",
-      "limit": "0.7 KB"
+      "limit": "0.9 KB"
     },
     {
       "name": "frameworks/sveltekit",
       "path": "dist/frameworks/sveltekit/index.js",
-      "limit": "0.7 KB"
+      "limit": "0.9 KB"
     },
     {
       "name": "frameworks/express",
       "path": "dist/frameworks/express/index.js",
-      "limit": "0.8 KB"
+      "limit": "1 KB"
     },
     {
       "name": "frameworks/fastify",
       "path": "dist/frameworks/fastify/index.js",
-      "limit": "0.7 KB"
+      "limit": "0.9 KB"
     },
     {
       "name": "frameworks/h3",
       "path": "dist/frameworks/h3/index.js",
-      "limit": "0.6 KB"
+      "limit": "0.8 KB"
     }
   ],
   "publishConfig": {
