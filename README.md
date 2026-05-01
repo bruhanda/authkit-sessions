@@ -474,6 +474,34 @@ The slot we fill is the one Lucia left empty: **standalone, framework-neutral, e
 
 ---
 
+## Examples
+
+Four runnable examples live in [`examples/`](./examples), each mirrored
+by a StackBlitz-ready sandbox in [`examples/sandbox/`](./examples/sandbox).
+Run any of them locally with `npx tsx examples/<name>.ts`, or click the
+button to launch the same code in the browser.
+
+| Example | What it covers | Sandbox |
+| --- | --- | --- |
+| [`basic-usage.ts`](./examples/basic-usage.ts) | `create` / `get` / `update` / `signOut` against the in-memory store. | [![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/bruhanda/authkit-sessions/tree/main/examples/sandbox/basic-usage) |
+| [`advanced-usage.ts`](./examples/advanced-usage.ts) | Every feature on at once: typed payload, fingerprint, concurrency (lru + deny-new), CSRF, audit, rotate, listByUser, revokeByUser. | [![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/bruhanda/authkit-sessions/tree/main/examples/sandbox/advanced-usage) |
+| [`with-hono.ts`](./examples/with-hono.ts) | `honoSessions(manager)` — CSRF-protected sign-in / me / action / sign-out, driven through `app.fetch(req)`. | [![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/bruhanda/authkit-sessions/tree/main/examples/sandbox/with-hono) |
+| [`with-express.ts`](./examples/with-express.ts) | `expressSessions(manager)` — same flow against a real `http.Server`, showing the Node ↔ Web Standards bridge. | [![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/bruhanda/authkit-sessions/tree/main/examples/sandbox/with-express) |
+
+```bash
+npm install
+npx tsx examples/basic-usage.ts
+npx tsx examples/advanced-usage.ts
+npx tsx examples/with-hono.ts
+npx tsx examples/with-express.ts
+```
+
+Each example is self-contained — no Redis, no Postgres, no Cloudflare
+account required. Swap `createMemoryStore()` for any other adapter from
+the table above when you wire it into a real deployment.
+
+---
+
 ## Out of Scope
 
 This library is sessions, full stop. The login flow itself, OAuth providers, MFA / TOTP, passkeys / WebAuthn, RBAC, rate limiting, JWT issuance, "active devices" UI components — all explicitly out of scope. Sessions consume a `userId` you produce; everything above sessions belongs in a sibling library. The audit hook is the integration point for anything you want to plug in (Sentry, OTel, your own auth metrics).

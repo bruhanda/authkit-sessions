@@ -1,0 +1,19 @@
+{
+  "name": "@authkit-sessions-sandbox/with-express",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx index.ts"
+  },
+  "dependencies": {
+    "@authkit/sessions": "^0.1.0",
+    "express": "^4.19.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0",
+    "@types/express": "^4.17.0"
+  }
+}
