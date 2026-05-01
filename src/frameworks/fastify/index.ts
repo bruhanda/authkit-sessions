@@ -23,7 +23,7 @@ const PROTECTED = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
  */
 export function fastifySessions<T extends SessionData>(manager: SessionManager<T>) {
   const csrfMode = assertCsrfReady(manager);
-  return async (
+  const plugin = async (
     fastify: import('fastify').FastifyInstance,
   ): Promise<void> => {
     fastify.decorate('sessions', manager);
@@ -47,6 +47,12 @@ export function fastifySessions<T extends SessionData>(manager: SessionManager<T
       (request as unknown as Record<string, unknown>)['session'] = session;
     });
   };
+  // Opt out of Fastify's plugin encapsulation so the decorator and the
+  // onRequest hook apply to routes registered on the parent instance,
+  // not just routes defined inside this plugin's scope. Equivalent to
+  // wrapping with `fastify-plugin` without taking on the dependency.
+  (plugin as unknown as Record<symbol, unknown>)[Symbol.for('skip-override')] = true;
+  return plugin;
 }
 
 function toStandardRequest(req: import('fastify').FastifyRequest): Request {
