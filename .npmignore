@@ -1,0 +1,75 @@
+# Source — only the compiled `dist/` ships.
+src/
+*.tsbuildinfo
+tsconfig.json
+tsconfig.build.json
+tsup.config.ts
+vitest.config.ts
+biome.json
+biome.jsonc
+
+# Tests, coverage, fixtures.
+**/__tests__/
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.bench.ts
+coverage/
+.nyc_output/
+
+# Examples and sandboxes.
+examples/
+sandbox/
+playground/
+scratch/
+demo/
+
+# Planning / portfolio docs (kept in repo, not in tarball).
+PLAN.md
+REVIEW.md
+NOTES.md
+TODO.md
+docs/
+*.draft.md
+
+# CI / tooling configuration.
+.github/
+.gitlab/
+.changeset/
+.husky/
+.size-limit.json
+.size-limit.cjs
+
+# VCS metadata.
+.git/
+.gitignore
+.gitattributes
+
+# Editor / OS.
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Environment files — never publish secrets.
+.env
+.env.*
+!.env.example
+
+# Local installs and lockfiles.
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lockb
+
+# Build / cache artifacts.
+.cache/
+.turbo/
+.tsbuildinfo
+.eslintcache
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
